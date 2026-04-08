@@ -196,13 +196,13 @@ class FileProcessor {
   }
 
   static decryptedName(name) {
-    return name.endsWith('.encrypted.txt')
-      ? `${name.replace('.encrypted.txt', '')}.decrypted.txt`
+    return name.endsWith('.aes256.txt')
+      ? `${name.replace('.aes256.txt', '')}.decrypted.txt`
       : `${name}.decrypted.txt`;
   }
 
   static decryptedImageName(name) {
-    return name.replace('.encrypted.png', '') || `${name}.decrypted`;
+    return name.replace('.aes256.png', '') || `${name}.decrypted`;
   }
 
   // ── Raw PNG builder/parser ──────────────────────────────────────────────────
@@ -528,8 +528,7 @@ const TextFileCryptoPanel = ({ user }) => {
     const f = e.target.files?.[0] || null;
     setFile(null); reset();
     if (!f) return;
-    if (mode === 'encrypt' && !FileProcessor.isText(f)) return setError('Only .txt files are allowed.');
-    if (mode === 'decrypt' && !f.name.toLowerCase().endsWith('.encrypted.txt')) return setError('Please select an .encrypted.txt file.');
+    if (!FileProcessor.isText(f)) return setError('Only .txt files are allowed.');
     setFile(f);
   };
 
@@ -546,7 +545,7 @@ const TextFileCryptoPanel = ({ user }) => {
         const plainBytes = new TextEncoder().encode(text);
         const payload = await CryptoEngine.encrypt({ plainBytes, password: key });
         const compact = `${payload.salt}:${payload.iv}:${payload.ciphertext}`;
-        const outName = `${file.name}.encrypted.txt`;
+        const outName = `${file.name}.aes256.txt`;
         FileProcessor.download({ text: compact, name: outName });
         await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Text File', data: compact, mimeType: 'text/plain' });
         setSuccess(`Encrypted "${file.name}" and downloaded.`);
@@ -576,12 +575,10 @@ const TextFileCryptoPanel = ({ user }) => {
       {success && <Notice type="success">{success}</Notice>}
       <ModeToggle value={mode} onChange={m => { setMode(m); setKey(''); reset(); }} />
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">
-          {mode === 'encrypt' ? 'Text File (.txt)' : 'Encrypted Text File (.encrypted.txt)'}
-        </label>
+        <label className="block text-sm font-medium text-slate-300 mb-2">Text File (.txt)</label>
         <input
           type="file"
-          accept={mode === 'encrypt' ? '.txt,text/plain' : '.encrypted.txt'}
+          accept=".txt,text/plain"
           onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs"
           required
@@ -706,7 +703,7 @@ const ImageCryptoPanel = () => {
     setFile(null); setPreview(null); reset();
     if (!f) return;
     if (mode === 'encrypt' && !FileProcessor.isImage(f)) return setError('Please select an image file (PNG, JPEG, GIF, WebP, etc.).');
-    if (mode === 'decrypt' && !(/\.encrypted(\s*\(\d+\))?\.png$/i.test(f.name))) return setError('Please select an .encrypted.png encrypted image file.');
+    if (mode === 'decrypt' && !(/\.aes256(\s*\(\d+\))?\.png$/i.test(f.name))) return setError('Please select an .aes256.png encrypted image file.');
     setFile(f);
     if (mode === 'encrypt') setPreview(URL.createObjectURL(f));
   };
@@ -728,7 +725,7 @@ const ImageCryptoPanel = () => {
         // Encode payload as JSON bytes, then embed into a distorted PNG
         const jsonBytes = new TextEncoder().encode(JSON.stringify(payload));
         const pngBlob = await FileProcessor.encodeToDistortedPng(jsonBytes);
-        const outName = `${file.name}.encrypted.png`;
+        const outName = `${file.name}.aes256.png`;
         const a = document.createElement('a');
         a.href = URL.createObjectURL(pngBlob);
         a.download = outName;
@@ -764,11 +761,11 @@ const ImageCryptoPanel = () => {
       <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          {mode === 'encrypt' ? 'Image File (PNG, JPEG, GIF, WebP…)' : 'Encrypted Image File (.encrypted.png)'}
+          {mode === 'encrypt' ? 'Image File (PNG, JPEG, GIF, WebP…)' : 'Encrypted Image File (.aes256.png)'}
         </label>
         <input
           type="file"
-          accept={mode === 'encrypt' ? 'image/*' : '.png,.encrypted.png'}
+          accept={mode === 'encrypt' ? 'image/*' : '.png,.aes256.png'}
           onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs"
           required
