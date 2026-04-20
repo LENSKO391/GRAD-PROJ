@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, CheckCircle, FileText, Download, Image, Type, Shield, Database, Clock, Trash2 } from 'lucide-react';
+import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, CheckCircle, FileText, Download, Image, Type, Shield, Database, Clock, Trash2, Box, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { HistoryStore, HistoryPanel } from './HistoryCrypto';
 
@@ -78,10 +78,10 @@ class AccountManager {
 
   find({ email }) { return this.accounts.find(a => a.email === email) || null; }
 
-  register({ name, email, password }) {
+  register({ name, email, password, historyPin = '' }) {
     if (!name || !email || !password) throw new Error('Please fill in all fields.');
     if (this.accounts.some(a => a.email === email)) throw new Error('An account with this email already exists.');
-    const account = { name, email, password };
+    const account = { name, email, password, historyPin };
     this.accounts.push(account);
     this.save();
     return account;
@@ -90,7 +90,7 @@ class AccountManager {
   login({ email, password }) {
     const account = this.accounts.find(a => a.email === email && a.password === password);
     if (!account) throw new Error('Invalid email or password.');
-    return { email: account.email, name: account.name };
+    return { email: account.email, name: account.name, historyPin: account.historyPin };
   }
 
   changePassword({ email, oldPassword, newPassword }) {
@@ -108,7 +108,8 @@ class AccountManager {
 
 class FileProcessor {
   static isText(file) { return file && (file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')); }
-  static isImage(file) { return file && file.type.startsWith('image/'); }
+  static isImage(file) { return file && (file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)); }
+  static is3D(file) { return file && /\.(glb|gltf|obj|stl|fbx)$/i.test(file.name); }
   static isCsv(file) { return file && (file.type === 'text/csv' || file.name.toLowerCase().endsWith('.csv')); }
   static isXlsx(file) { return file && (file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.name.toLowerCase().endsWith('.xlsx')); }
   static isDataset(file) { return FileProcessor.isCsv(file) || FileProcessor.isXlsx(file); }
@@ -689,6 +690,7 @@ const TextAreaCryptoPanel = ({ user }) => {
 
 const ImageCryptoPanel = () => {
   const [mode, setMode] = useState('encrypt');
+  const [dimension, setDimension] = useState('2d');
   const [file, setFile] = useState(null);
   const [key, setKey] = useState('');
   const [error, setError] = useState('');
@@ -702,10 +704,21 @@ const ImageCryptoPanel = () => {
     const f = e.target.files?.[0] || null;
     setFile(null); setPreview(null); reset();
     if (!f) return;
-    if (mode === 'encrypt' && !FileProcessor.isImage(f)) return setError('Please select an image file (PNG, JPEG, GIF, WebP, etc.).');
-    if (mode === 'decrypt' && !(/\.aes256(\s*\(\d+\))?\.png$/i.test(f.name))) return setError('Please select an .aes256.png encrypted image file.');
+
+    if (mode === 'encrypt') {
+      if (dimension === '2d') {
+        if (!FileProcessor.isImage(f)) return setError('Please select a 2D image file (PNG, JPEG, GIF, etc.).');
+      } else {
+        if (!FileProcessor.is3D(f)) return setError('Please select a 3D model file (.glb, .obj, .stl, .fbx).');
+      }
+    } else {
+      if (!(/\.aes256(\s*\(\d+\))?\.png$/i.test(f.name))) return setError('Please select an .aes256.png encrypted file.');
+    }
+
     setFile(f);
-    if (mode === 'encrypt') setPreview(URL.createObjectURL(f));
+    if (mode === 'encrypt' && dimension === '2d') {
+      setPreview(URL.createObjectURL(f));
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -719,32 +732,30 @@ const ImageCryptoPanel = () => {
         const buf = await FileProcessor.readArrayBuffer(file);
         const plainBytes = new Uint8Array(buf);
         const payload = await CryptoEngine.encrypt({ plainBytes, password: key });
-        // Store original mime type so we can restore it on decrypt
         payload.mimeType = file.type;
         payload.originalName = file.name;
-        // Encode payload as JSON bytes, then embed into a distorted PNG
+        payload.dimension = dimension; // Tag with dimension metadata
+        
         const jsonBytes = new TextEncoder().encode(JSON.stringify(payload));
         const pngBlob = await FileProcessor.encodeToDistortedPng(jsonBytes);
         const outName = `${file.name}.aes256.png`;
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(pngBlob);
-        a.download = outName;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        setSuccess(`Encrypted image "${file.name}" and downloaded as distorted PNG.`);
+        
+        FileProcessor.downloadBytes({ bytes: new Uint8Array(await pngBlob.arrayBuffer()), name: outName, mimeType: 'image/png' });
+        setSuccess(`Encrypted ${dimension === '2d' ? 'image' : '3D model'} "${file.name}" and downloaded as distorted PNG.`);
       } else {
-        // Decode JSON bytes from the distorted PNG, then decrypt
         const jsonBytes = await FileProcessor.decodeFromDistortedPng(file);
         const jsonStr = new TextDecoder().decode(jsonBytes);
         let payload;
         try { payload = JSON.parse(jsonStr); }
         catch { throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.'); }
+        
         if (payload.algorithm !== 'AES-256-GCM') throw new Error('Unsupported algorithm.');
         const plainBytes = await CryptoEngine.decrypt({ payload, password: key });
-        const mimeType = payload.mimeType || 'image/png';
+        const mimeType = payload.mimeType || (payload.dimension === '3d' ? 'application/octet-stream' : 'image/png');
         const originalName = payload.originalName || FileProcessor.decryptedImageName(file.name);
+        
         FileProcessor.downloadBytes({ bytes: plainBytes, name: originalName, mimeType });
-        setSuccess(`Decrypted image and downloaded as "${originalName}".`);
+        setSuccess(`Decrypted ${payload.dimension === '3d' ? '3D model' : 'image'} and downloaded as "${originalName}".`);
       }
     } catch (err) {
       setError(err.message || 'Operation failed. Check your key and try again.');
@@ -758,30 +769,78 @@ const ImageCryptoPanel = () => {
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && <Notice type="error">{error}</Notice>}
       {success && <Notice type="success">{success}</Notice>}
-      <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
+      
+      <div className="flex flex-col gap-3">
+        <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
+        
+        {mode === 'encrypt' && (
+          <div className="flex gap-2 p-1 bg-slate-900/40 rounded-lg border border-slate-700/50">
+            {[
+              { id: '2d', label: '2D Image', icon: Layers },
+              { id: '3d', label: '3D Model', icon: Box }
+            ].map(d => (
+              <button
+                key={d.id}
+                type="button"
+                onClick={() => { setDimension(d.id); setFile(null); setPreview(null); reset(); }}
+                className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-xs font-medium transition-all ${dimension === d.id ? 'bg-slate-700 text-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                <d.icon size={13} />
+                {d.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          {mode === 'encrypt' ? 'Image File (PNG, JPEG, GIF, WebP…)' : 'Encrypted Image File (.aes256.png)'}
+          {mode === 'encrypt' 
+            ? (dimension === '2d' ? 'Image File (PNG, JPEG, GIF...)' : '3D Model File (.glb, .obj, .stl...)')
+            : 'Encrypted File (.aes256.png)'}
         </label>
         <input
           type="file"
-          accept={mode === 'encrypt' ? 'image/*' : '.png,.aes256.png'}
+          accept={mode === 'encrypt' 
+            ? (dimension === '2d' ? 'image/*' : '.glb,.gltf,.obj,.stl,.fbx') 
+            : '.png,.aes256.png'}
           onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs"
           required
         />
         {file && <p className="text-slate-500 text-xs mt-1.5">Selected: {file.name}</p>}
-        {preview && (
-          <div className="mt-3 rounded-lg overflow-hidden border border-slate-700 max-h-48 flex items-center justify-center bg-slate-950">
-            <img src={preview} alt="Preview" className="max-h-48 object-contain" />
+        
+        {mode === 'encrypt' && file && (
+          <div className="mt-3 rounded-lg overflow-hidden border border-slate-700 bg-slate-950 p-4 flex flex-col items-center justify-center gap-3">
+            {dimension === '2d' && preview ? (
+              <img src={preview} alt="Preview" className="max-h-48 object-contain rounded" />
+            ) : (
+              <div className="py-8 flex flex-col items-center gap-3">
+                <div className="w-16 h-16 rounded-full bg-cyan-500/10 flex items-center justify-center text-cyan-500">
+                  <Box size={32} />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-slate-300">3D Model Selected</p>
+                  <p className="text-xs text-slate-500">{file.name}</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
+
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
         <KeyInput value={key} onChange={setKey} />
       </div>
-      <SubmitBtn processing={processing} mode={mode} label={mode === 'encrypt' ? 'Encrypt Image & Download' : 'Decrypt Image & Download'} />
+      
+      <SubmitBtn 
+        processing={processing} 
+        mode={mode} 
+        label={mode === 'encrypt' 
+          ? `Encrypt ${dimension === '2d' ? 'Image' : '3D Model'} & Download` 
+          : `Decrypt ${dimension === '2d' ? 'Image' : '3D Model'} & Download`} 
+      />
     </form>
   );
 };
@@ -965,7 +1024,7 @@ const DatasetCryptoPanel = ({ user }) => {
 
 const AuthScreen = ({ onLogin }) => {
   const [authMode, setAuthMode] = useState('login');
-  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [form, setForm] = useState({ name: '', email: '', password: '', historyPin: '' });
   const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState('');
 
@@ -977,8 +1036,8 @@ const AuthScreen = ({ onLogin }) => {
       if (authMode === 'login') {
         user = accountManager.login({ email: form.email, password: form.password });
       } else {
-        accountManager.register({ name: form.name, email: form.email, password: form.password });
-        user = { email: form.email, name: form.name };
+        accountManager.register({ name: form.name, email: form.email, password: form.password, historyPin: form.historyPin });
+        user = { email: form.email, name: form.name, historyPin: form.historyPin };
       }
       accountManager.persistSession({ user });
       onLogin(user);
@@ -1040,6 +1099,27 @@ const AuthScreen = ({ onLogin }) => {
                 </button>
               </div>
             </div>
+
+            {authMode === 'signup' && (
+              <div className="pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-slate-300">History PIN (Optional)</label>
+                  <span className="text-[10px] text-cyan-500 uppercase tracking-wider font-bold">Privacy Layer</span>
+                </div>
+                <div className="relative">
+                  <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+                  <input
+                    type="password"
+                    maxLength={6}
+                    value={form.historyPin || ''}
+                    onChange={e => setForm({ ...form, historyPin: e.target.value.replace(/\D/g, '') })}
+                    placeholder="Set 4-6 digit history PIN"
+                    className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-slate-600 text-cyan-400 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm font-mono"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1.5 italic">Leave empty to access history directly without a PIN.</p>
+              </div>
+            )}
             <button type="submit"
               className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white py-3 rounded-lg hover:from-cyan-500 hover:to-blue-500 font-semibold shadow-lg transition-all text-sm mt-2">
               {authMode === 'login' ? 'Login' : 'Create Account'}
@@ -1110,20 +1190,70 @@ const TABS = [
 ];
 
 // HistoryPanel is now imported from './HistoryCrypto.js'
+const HistoryLock = ({ user, onUnlock }) => {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (pin === user.historyPin) {
+      onUnlock();
+    } else {
+      setError('Incorrect PIN. Please try again.');
+      setPin('');
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center py-12 px-4 animate-in fade-in zoom-in duration-300">
+      <div className="w-16 h-16 bg-cyan-500/10 rounded-full flex items-center justify-center text-cyan-500 mb-6 shadow-xl shadow-cyan-900/20">
+        <Lock size={32} />
+      </div>
+      <h2 className="text-xl font-bold text-white mb-2">History Locked</h2>
+      <p className="text-slate-400 text-sm mb-8 text-center max-w-xs">
+        This section is protected by a dedicated PIN. Please enter it to view your activity log.
+      </p>
+      
+      <form onSubmit={handleSubmit} className="w-full max-w-xs space-y-4">
+        {error && <Notice type="error">{error}</Notice>}
+        <div className="relative">
+          <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+          <input
+            type="password"
+            maxLength={6}
+            value={pin}
+            onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+            placeholder="Enter History PIN"
+            className="w-full pl-10 pr-4 py-3 bg-slate-900 border border-slate-700 text-cyan-400 rounded-xl focus:ring-2 focus:ring-cyan-500 focus:outline-none text-center text-lg font-mono tracking-[0.5em]"
+            autoFocus
+            required
+          />
+        </div>
+        <button
+          type="submit"
+          className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-3 rounded-lg font-semibold shadow-lg transition-all"
+        >
+          Unlock History
+        </button>
+      </form>
+    </div>
+  );
+};
 
 const EncryptionSystem = () => {
   const [user, setUser] = useState(null);
   const [isAuth, setIsAuth] = useState(false);
   const [activeTab, setActiveTab] = useState('file');
   const [showChangePwd, setShowChangePwd] = useState(false);
+  const [historyUnlocked, setHistoryUnlocked] = useState(false);
 
   useEffect(() => {
     const session = accountManager.getSession();
     if (session) { setUser(session); setIsAuth(true); }
   }, []);
 
-  const handleLogin = (u) => { setUser(u); setIsAuth(true); };
-  const handleLogout = () => { accountManager.clearSession(); setUser(null); setIsAuth(false); };
+  const handleLogin = (u) => { setUser(u); setIsAuth(true); setHistoryUnlocked(false); };
+  const handleLogout = () => { accountManager.clearSession(); setUser(null); setIsAuth(false); setHistoryUnlocked(false); };
 
   if (!isAuth) return <AuthScreen onLogin={handleLogin} />;
 
@@ -1195,7 +1325,11 @@ const EncryptionSystem = () => {
           {activeTab === 'textarea' && <TextAreaCryptoPanel user={user} />}
           {activeTab === 'image' && <ImageCryptoPanel user={user} />}
           {activeTab === 'dataset' && <DatasetCryptoPanel user={user} accountManager={accountManager} />}
-          {activeTab === 'history' && <HistoryPanel user={user} HistoryStore={HistoryStore} FileProcessor={FileProcessor} fromB64={fromB64} />}
+          {activeTab === 'history' && (
+            user.historyPin && !historyUnlocked 
+              ? <HistoryLock user={user} onUnlock={() => setHistoryUnlocked(true)} />
+              : <HistoryPanel user={user} HistoryStore={HistoryStore} FileProcessor={FileProcessor} fromB64={fromB64} />
+          )}
         </div>
 
         <p className="text-center text-xs text-slate-600 mt-4">MTI University · Dimensional Data Encryption System</p>
