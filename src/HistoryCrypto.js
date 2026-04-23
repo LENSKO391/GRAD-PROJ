@@ -75,6 +75,9 @@ export class HistoryStore {
 // =========================================================================
 export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => {
   const [history, setHistory] = useState([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteId, setDeleteId] = useState(null);
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
 
   useEffect(() => {
     HistoryStore.getRecords(user.email).then(records => setHistory(records));
@@ -93,13 +96,49 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
   // SECTION 6: Moaz 
   // =========================================================================
   const handleDelete = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this history log?")) return;
+    setDeleteId(id);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteId) return;
     try {
-      await HistoryStore.deleteRecord(id);
-      setHistory(history.filter(r => r.id !== id));
+      await HistoryStore.deleteRecord(deleteId);
+      setHistory(history.filter(r => r.id !== deleteId));
+      setShowDeleteConfirm(false);
+      setDeleteId(null);
     } catch (e) {
       alert("Failed to delete record: " + e);
+      setShowDeleteConfirm(false);
+      setDeleteId(null);
     }
+  };
+
+  const cancelDelete = () => {
+    setShowDeleteConfirm(false);
+    setDeleteId(null);
+  };
+
+  const handleDeleteAll = () => {
+    setShowDeleteAllConfirm(true);
+  };
+
+  const confirmDeleteAll = async () => {
+    try {
+      // Delete all records for this user
+      for (const record of history) {
+        await HistoryStore.deleteRecord(record.id);
+      }
+      setHistory([]);
+      setShowDeleteAllConfirm(false);
+    } catch (e) {
+      alert("Failed to delete all records: " + e);
+      setShowDeleteAllConfirm(false);
+    }
+  };
+
+  const cancelDeleteAll = () => {
+    setShowDeleteAllConfirm(false);
   };
 
   return (
@@ -110,8 +149,22 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
           <p>No activity history found for this account.</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-slate-600/60 overflow-hidden">
-          <div className="overflow-x-auto">
+        <div className="space-y-4">
+          {/* Header with Delete All button */}
+          <div className="flex justify-between items-center">
+            <h3 className="text-lg font-semibold text-slate-200">Activity History</h3>
+            <button
+              onClick={handleDeleteAll}
+              disabled={history.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-red-700/20 hover:bg-red-700/80 disabled:bg-slate-700 disabled:text-slate-500 text-red-400 hover:text-white rounded-md text-sm font-medium transition-colors"
+            >
+              <Trash2 size={16} />
+              Delete All
+            </button>
+          </div>
+
+          <div className="rounded-lg border border-slate-600/60 overflow-hidden">
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-800">
@@ -155,6 +208,56 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
                 ))}
               </tbody>
             </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-slate-200 mb-4">Confirm Deletion</h3>
+            <p className="text-slate-300 mb-6">Are you sure you want to delete this history log? This action cannot be undone.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={cancelDelete}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-md font-medium transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Confirmation Dialog */}
+      {showDeleteAllConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-slate-200 mb-4">Confirm Delete All</h3>
+            <p className="text-slate-300 mb-2">Are you sure you want to delete all {history.length} history logs?</p>
+            <p className="text-red-400 text-sm mb-6">This action cannot be undone and will permanently remove all your activity history.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={cancelDeleteAll}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteAll}
+                className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-md font-medium transition-colors"
+              >
+                Delete All
+              </button>
+            </div>
           </div>
         </div>
       )}
