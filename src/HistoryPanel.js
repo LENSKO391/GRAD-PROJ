@@ -4,7 +4,7 @@ import { Clock, Download, Trash2 } from 'lucide-react';
 export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => {
     const [history, setHistory] = useState([]);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [deleteId, setDeleteId] = useState(null);
+    const [toDeleteRecord, setToDeleteRecord] = useState(null);
     const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
 
     useEffect(() => {
@@ -12,6 +12,17 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
     }, [user.email, HistoryStore]);
 
     const handleDownload = (record) => {
+        if (record.downloadURL) {
+            const a = document.createElement('a');
+            a.href = record.downloadURL;
+            a.download = record.file;
+            a.target = "_blank";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            return;
+        }
+
         if (!record.data) return alert("File data missing from this record.");
         if (record.isBase64) {
             FileProcessor.downloadBytes({ bytes: fromB64(record.data), name: record.file, mimeType: record.mimeType });
@@ -20,28 +31,28 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
         }
     };
 
-    const handleDelete = async (id) => {
-        setDeleteId(id);
+    const handleDelete = async (record) => {
+        setToDeleteRecord(record);
         setShowDeleteConfirm(true);
     };
 
     const confirmDelete = async () => {
-        if (!deleteId) return;
+        if (!toDeleteRecord) return;
         try {
-            await HistoryStore.deleteRecord(deleteId);
-            setHistory(history.filter(r => r.id !== deleteId));
+            await HistoryStore.deleteRecord(toDeleteRecord.id, toDeleteRecord.storagePath);
+            setHistory(history.filter(r => r.id !== toDeleteRecord.id));
             setShowDeleteConfirm(false);
-            setDeleteId(null);
+            setToDeleteRecord(null);
         } catch (e) {
             alert("Failed to delete record: " + e);
             setShowDeleteConfirm(false);
-            setDeleteId(null);
+            setToDeleteRecord(null);
         }
     };
 
     const cancelDelete = () => {
         setShowDeleteConfirm(false);
-        setDeleteId(null);
+        setToDeleteRecord(null);
     };
 
     const handleDeleteAll = () => {
@@ -50,9 +61,9 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
 
     const confirmDeleteAll = async () => {
         try {
-            // Delete all records for this user
+            // Delete all records and connected files from Firebase Storage
             for (const record of history) {
-                await HistoryStore.deleteRecord(record.id);
+                await HistoryStore.deleteRecord(record.id, record.storagePath);
             }
             setHistory([]);
             setShowDeleteAllConfirm(false);
@@ -115,12 +126,12 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
                                         </td>
                                         <td className="px-4 py-3 text-slate-300 border-b border-slate-800/60 text-right">
                                             <div className="flex justify-end gap-2">
-                                                <button onClick={() => handleDownload(record)} disabled={!record.data} title="Download"
+                                                <button onClick={() => handleDownload(record)} disabled={!record.data && !record.downloadURL} title="Download"
                                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-md text-xs font-semibold transition-colors">
                                                     <Download size={12} />
                                                     <span className="hidden sm:inline">Download</span>
                                                 </button>
-                                                <button onClick={() => handleDelete(record.id)} title="Delete Log"
+                                                <button onClick={() => handleDelete(record)} title="Delete Log"
                                                     className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-red-700/20 hover:bg-red-700/80 text-red-500 hover:text-white rounded-md text-xs font-semibold transition-colors">
                                                     <Trash2 size={13} />
                                                 </button>
