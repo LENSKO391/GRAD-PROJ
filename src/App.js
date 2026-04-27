@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, CheckCircle, FileText, Download, Image, Type, Shield, Database, Clock, Box, Layers } from 'lucide-react';
+import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { HistoryStore, HistoryPanel } from './HistoryCrypto';
-import { TabBtn, ModeToggle, Notice, KeyInput, SubmitBtn } from './components/UIComponents';
+import { TabBtn, ModeToggle, Notice, SubmitBtn } from './components/UIComponents';
 import { googleSignIn } from './FirebaseAuth';
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
@@ -97,6 +97,9 @@ class FileProcessor {
   // FIX: was `name.replace(...) || fallback` — replace() returns the original string when no match
   // (truthy), so the fallback was unreachable. Now uses an explicit includes() check.
   static decryptedImageName(name) {
+    // Strip .encrypted from name if present, then restore original extension or use .png
+    const noExt = name.replace(/\.encrypted\.png$/i, '');
+    if (noExt !== name) return `${noExt}.decrypted.png`;
     if (name.toLowerCase().endsWith('.png')) {
       return `${name.slice(0, -4)}.decrypted.png`;
     }
@@ -156,7 +159,57 @@ class FileProcessor {
       reader.readAsArrayBuffer(file);
     });
   }
-
+static async distortSTL(bytes, password) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const triCount = view.getUint32(80, true);
+  const expectedSize = 84 + triCount * 50;
+  
+  // Copy the entire file
+  const distorted = new Uint8Array(expectedSize);
+  distorted.set(bytes.subarray(0, expectedSize));
+  
+  // Derive keystream from password
+  const salt = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
+  const key = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
+  const keystreamLen = Math.max(65536, triCount * 36); // 36 bytes per triangle (9 floats × 4)
+  const zeroArray = new Uint8Array(keystreamLen);
+  const keystream = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(12) }, key, zeroArray
+  ));
+  
+  let keystreamPos = 0;
+  
+  for (let t = 0; t < triCount; t++) {
+    const triOffset = 84 + t * 50;
+    
+    // Distort vertex coordinates only (12-48 bytes in each triangle)
+    for (let v = 0; v < 3; v++) {
+      for (let c = 0; c < 3; c++) {
+        const floatOffset = triOffset + 12 + v * 12 + c * 4;
+        
+        // Read current float value
+        const originalFloat = view.getFloat32(floatOffset, true);
+        
+        // Get deterministic noise value between -0.3 and +0.3 of original magnitude
+        const noiseVal = (keystream[keystreamPos % keystream.length] / 255) * 0.6 - 0.3;
+        let newFloat = originalFloat + (originalFloat * noiseVal);
+        
+        // Clamp to reasonable range (avoid exploding values)
+        newFloat = Math.max(-1000, Math.min(1000, newFloat));
+        
+        // Write back distorted float
+        const bytes = new Uint8Array(4);
+        new DataView(bytes.buffer).setFloat32(0, newFloat, true);
+        for (let b = 0; b < 4; b++) {
+          distorted[floatOffset + b] = bytes[b];
+        }
+        keystreamPos++;
+      }
+    }
+  }
+  
+  return distorted;
+}
   // ── CRC / Adler helpers ───────────────────────────────────────────────────
 
   static _crc32Table = (() => {
@@ -278,12 +331,15 @@ static async getImageData(file) {
     });
   }
 /* eslint-disable no-undef */
+// ── PNG custom-chunk approach ─────────────────────────────────────────────────
+// Encrypted payload is stored verbatim in a private ancillary PNG chunk ('enCr').
+// Pixel data is distorted visually using the password-derived keystream so the
+// output looks scrambled but the payload bytes are never touched by compression.
+
 static async encodeToDistortedPng(dataBytes, originalFile, password) {
-  const header = new Uint8Array(4);
-  new DataView(header.buffer).setUint32(0, dataBytes.length, true);
-  const combined = new Uint8Array(4 + dataBytes.length);
-  combined.set(header);
-  combined.set(dataBytes, 4);
+  // 1. Derive keystream for visual distortion
+  const distortionSalt = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
+  const distortionKey = await CryptoEngine.deriveKey({ password, salt: distortionSalt, iterations: 1000 });
 
   let width, height, rgba;
   if (originalFile && FileProcessor.isImage(originalFile)) {
@@ -292,315 +348,280 @@ static async encodeToDistortedPng(dataBytes, originalFile, password) {
       i.onload = () => res(i);
       i.src = URL.createObjectURL(originalFile);
     });
-
     width = img.width;
     height = img.height;
     const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = width; canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
-    const imageData = ctx.getImageData(0, 0, width, height);
-    rgba = new Uint8Array(imageData.data.buffer);
+    rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer);
   } else {
-    const pixelCount = Math.ceil(combined.length * 8 / 3);
-    width = Math.min(Math.ceil(Math.sqrt(pixelCount)), 16383);
-    height = Math.ceil(pixelCount / width);
-    rgba = new Uint8Array(width * height * 4);
-    for (let i = 0; i < rgba.length; i += 4) {
-      rgba[i] = 255;
-      rgba[i + 1] = 255;
-      rgba[i + 2] = 255;
-      rgba[i + 3] = 255;
-    }
+    width = 256; height = 256;
+    rgba = new Uint8Array(width * height * 4).fill(128);
   }
 
-  // Embed data in 2 LSBs per channel
-  const bitsPerChannel = 2;
-  const bitsPerPixel = bitsPerChannel * 3;
-  const pixelsNeeded = Math.ceil((combined.length * 8) / bitsPerPixel);
-  if (pixelsNeeded > width * height) throw new Error('Image too small to embed data.');
-
-  let bitIndex = 0;
-  for (let p = 0; p < pixelsNeeded && bitIndex < combined.length * 8; p++) {
-    const rgbaIdx = p * 4;
-    for (let c = 0; c < 3 && bitIndex < combined.length * 8; c++) {
-      for (let b = 0; b < bitsPerChannel && bitIndex < combined.length * 8; b++) {
-        const byteIndex = bitIndex >> 3;
-        const bitPos = 7 - (bitIndex % 8);
-        const bit = (combined[byteIndex] >> bitPos) & 1;
-        const mask = 1 << b;
-        rgba[rgbaIdx + c] = (rgba[rgbaIdx + c] & ~mask) | (bit << b);
-        bitIndex++;
-      }
-    }
-  }
-
-  // Apply strong distortion to obscure the image
-  const distortionSalt = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
-  const distortionKey = await CryptoEngine.deriveKey({ password, salt: distortionSalt, iterations: 1000 });
+  // 2. Apply keystream distortion to all pixels
   const zeroArray = new Uint8Array(Math.max(65536, width * height * 4));
   const keystream = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, distortionKey, zeroArray));
-
-  const totalPixels = width * height;
-  for (let p = 0; p < totalPixels; p++) {
-    const rgbaIdx = p * 4;
-    const keyIdx = p % keystream.length;
-    // Reduce distortion by affecting only upper 2 bits
-    rgba[rgbaIdx] = rgba[rgbaIdx] ^ (keystream[keyIdx] & 0xC0);
-    rgba[rgbaIdx + 1] = rgba[rgbaIdx + 1] ^ (keystream[keyIdx] & 0xC0);
-    rgba[rgbaIdx + 2] = rgba[rgbaIdx + 2] ^ (keystream[keyIdx] & 0xC0);
+  for (let p = 0; p < width * height; p++) {
+    const ri = p * 4, ki = p % keystream.length;
+    rgba[ri]     ^= keystream[ki];
+    rgba[ri + 1] ^= keystream[(ki + 1) % keystream.length];
+    rgba[ri + 2] ^= keystream[(ki + 2) % keystream.length];
   }
 
-  return new Blob([FileProcessor._buildPNG(width, height, rgba)], { type: 'image/png' });
+  // 3. Build PNG with a private ancillary chunk 'enCr' containing the payload bytes
+  const pngWithoutEnd = FileProcessor._buildPNGNoEnd(width, height, rgba);
+  const enCrChunk = FileProcessor._chunk('enCr', Array.from(dataBytes));
+  const iend = FileProcessor._chunk('IEND', []);
+
+  const total = pngWithoutEnd.length + enCrChunk.length + iend.length;
+  const out = new Uint8Array(total);
+  out.set(pngWithoutEnd, 0);
+  out.set(enCrChunk, pngWithoutEnd.length);
+  out.set(iend, pngWithoutEnd.length + enCrChunk.length);
+  return new Blob([out], { type: 'image/png' });
 }
 
-/* eslint-disable no-undef */
-static async decodeFromDistortedPng(file, password) {
-    const bytes = new Uint8Array(await FileProcessor.readArrayBuffer(file));
-  const { rgba } = FileProcessor._parsePNG(bytes);
-    
-    // Reverse the distortion first
-    const distortionSalt = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
-    const distortionKey = await CryptoEngine.deriveKey({ password, salt: distortionSalt, iterations: 1000 });
-    const zeroArray = new Uint8Array(Math.max(65536, rgba.length));
-    const keystream = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, distortionKey, zeroArray));
+static _buildPNGNoEnd(width, height, rgbaPixels) {
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = new Uint8Array([...FileProcessor._u32be(width), ...FileProcessor._u32be(height), 8, 2, 0, 0, 0]);
+  const rowBytes = width * 3;
+  const rawRows = new Uint8Array(height * (1 + rowBytes));
+  for (let y = 0; y < height; y++) {
+    rawRows[y * (1 + rowBytes)] = 0;
+    for (let x = 0; x < width; x++) {
+      const src = (y * width + x) * 4, dst = y * (1 + rowBytes) + 1 + x * 3;
+      rawRows[dst] = rgbaPixels[src]; rawRows[dst + 1] = rgbaPixels[src + 1]; rawRows[dst + 2] = rgbaPixels[src + 2];
+    }
+  }
+  const parts = [sig, FileProcessor._chunk('IHDR', Array.from(ihdr)), FileProcessor._chunk('IDAT', Array.from(FileProcessor._zlibStore(rawRows)))];
+  const len = parts.reduce((s, c) => s + c.length, 0);
+  const out = new Uint8Array(len);
+  let off = 0; for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
 
-    const totalPixels = rgba.length / 4;
-    for (let p = 0; p < totalPixels; p++) {
-      const rgbaIdx = p * 4;
-      const keyIdx = p % keystream.length;
-      // Reverse the reduced distortion
-      rgba[rgbaIdx] = rgba[rgbaIdx] ^ (keystream[keyIdx] & 0xC0);
-      rgba[rgbaIdx + 1] = rgba[rgbaIdx + 1] ^ (keystream[keyIdx] & 0xC0);
-      rgba[rgbaIdx + 2] = rgba[rgbaIdx + 2] ^ (keystream[keyIdx] & 0xC0);
+static async decodeFromDistortedPng(file, password) {
+  const bytes = new Uint8Array(await FileProcessor.readArrayBuffer(file));
+  // Validate PNG signature
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < 8; i++) {
+    if (bytes[i] !== sig[i]) throw new Error('Not a valid PNG file.');
+  }
+  // Walk chunks looking for 'enCr'
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let off = 8;
+  while (off + 12 <= bytes.length) {
+    const len = view.getUint32(off); off += 4;
+    const type = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]); off += 4;
+    if (type === 'enCr') {
+      return bytes.slice(off, off + len);
     }
+    off += len + 4; // skip data + CRC
+  }
+  throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.');
+}
+
+static async encodeToDistorted3D(dataBytes, originalFile, password = null) {
+  const originalBytes = new Uint8Array(await FileProcessor.readArrayBuffer(originalFile));
+  const fileName = originalFile.name.toLowerCase();
+  
+  // For STL files, embed data inside the file structure
+  if (fileName.endsWith('.stl') || fileName.endsWith('.stlb')) {
+    return FileProcessor.encodeToStlWithEmbeddedData(originalBytes, dataBytes, password);
+  }
+  
+  // For other 3D formats, still append (they're more forgiving)
+  const magic = new TextEncoder().encode('CVLT');
+  const lenBuf = new Uint8Array(4);
+  new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
+  
+  const result = new Uint8Array(originalBytes.length + 4 + 4 + dataBytes.length);
+  result.set(originalBytes, 0);
+  result.set(magic, originalBytes.length);
+  result.set(lenBuf, originalBytes.length + 4);
+  result.set(dataBytes, originalBytes.length + 8);
+  
+  return new Blob([result], { type: 'application/octet-stream' });
+}
+static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
+  const view = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
+  const originalTriCount = view.getUint32(80, true);
+  
+  // Check if we have enough space in attribute bytes (2 bytes per triangle)
+  const maxPayloadBytes = originalTriCount * 2;
+  
+  if (dataBytes.length + 8 <= maxPayloadBytes) {
+    // Small payload: store entirely in attribute bytes
+    const distorted = new Uint8Array(originalBytes.length);
+    distorted.set(originalBytes);
     
-    const bitsPerChannel = 2;
-    // First, extract the length from the first 32 bits
-    let bitIndex = 0;
-    let len = 0;
-    for (let i = 0; i < 32; i++) {
-      const p = Math.floor(i / (bitsPerChannel * 3));
-      const c = Math.floor((i % (bitsPerChannel * 3)) / bitsPerChannel);
-      const b = (i % (bitsPerChannel * 3)) % bitsPerChannel;
-      const rgbaIdx = p * 4 + c;
-      const bit = (rgba[rgbaIdx] >> b) & 1;
-      len |= bit << (31 - i);
-    }
-    
-    const totalBits = 32 + len * 8;
-    const extracted = new Uint8Array(4 + len);
-    
-    bitIndex = 0;
-    const pixelsNeeded = Math.ceil(totalBits / (bitsPerChannel * 3));
-    for (let p = 0; p < pixelsNeeded && bitIndex < totalBits; p++) {
-      const rgbaIdx = p * 4;
-      for (let c = 0; c < 3 && bitIndex < totalBits; c++) {
-        for (let b = 0; b < bitsPerChannel && bitIndex < totalBits; b++) {
-          const bit = (rgba[rgbaIdx + c] >> b) & 1;
-          const byteIndex = bitIndex >> 3;
-          const bitPos = 7 - (bitIndex % 8);
-          extracted[byteIndex] |= bit << bitPos;
-          bitIndex++;
+    // Write magic 'CV' (2 bytes) at start of attribute bytes of first triangle
+    // Write length, then data
+    let dataPos = 0;
+    for (let t = 0; t < originalTriCount && dataPos < dataBytes.length + 4; t++) {
+      const attrOffset = 84 + t * 50 + 48; // attribute bytes location
+      
+      if (t === 0) {
+        distorted[attrOffset] = 0x43;     // 'C'
+        distorted[attrOffset + 1] = 0x56; // 'V'
+        dataPos = 2;
+      } else if (t === 1) {
+        // Write length in next 2 bytes
+        distorted[attrOffset] = (dataBytes.length >> 8) & 0xFF;
+        distorted[attrOffset + 1] = dataBytes.length & 0xFF;
+        dataPos += 2;
+      } else {
+        const remaining = dataBytes.length - (dataPos - 4);
+        const bytesToWrite = Math.min(2, remaining);
+        for (let i = 0; i < bytesToWrite && dataPos - 4 < dataBytes.length; i++) {
+          distorted[attrOffset + i] = dataBytes[dataPos - 4 + i];
+          dataPos++;
         }
       }
     }
     
-    if (new DataView(extracted.buffer, 0, 4).getUint32(0, true) !== len) throw new Error('Corrupted data.');
-    return extracted.slice(4);
-  }
-
-  static async encodeToDistorted3D(dataBytes, originalFile) {
-    // Read the original 3D file
-    const originalBytes = new Uint8Array(await FileProcessor.readArrayBuffer(originalFile));
-    const fileName = originalFile.name.toLowerCase();
-
-    // Handle different 3D file formats
-    if (fileName.endsWith('.stl')) {
-      return FileProcessor._encodeDistortedSTL(dataBytes, originalBytes);
-    } else {
-      // For other 3D formats, use a simpler approach
-      return FileProcessor._encodeDistortedGeneric3D(dataBytes, originalBytes);
-    }
-  }
-
-  static _encodeDistortedSTL(dataBytes, originalBytes) {
-    // Create a proper STL file with distorted geometry that encodes our encrypted data
-    const header = new Uint8Array(80);
-    // Copy first 76 bytes of original header if available, leave last 4 for our signature
-    if (originalBytes.length >= 76) {
-      header.set(originalBytes.slice(0, 76));
-    }
-    // Add signature to indicate this is encrypted
-    header.set(new TextEncoder().encode('ENCR'), 76);
-
-    // Create length header for our encrypted data
-    const lengthHeader = new Uint8Array(4);
-    new DataView(lengthHeader.buffer).setUint32(0, dataBytes.length, true);
-
-    // Combine length header + encrypted data
-    const dataToStore = new Uint8Array(4 + dataBytes.length);
-    dataToStore.set(lengthHeader);
-    dataToStore.set(dataBytes, 4);
-
-    // Calculate how many triangles we need to store the data
-    // Each triangle can store 48 bytes of data (12 floats * 4 bytes each)
-    const trianglesNeeded = Math.ceil(dataToStore.length / 48);
-    const totalTriangles = Math.max(1, trianglesNeeded); // At least 1 triangle
-
-    const result = new Uint8Array(84 + totalTriangles * 50);
-    result.set(header, 0);
-
-    // Write triangle count
-    new DataView(result.buffer, 80, 4).setUint32(0, totalTriangles, true);
-
-    // Encode data in triangle vertices (each triangle has 12 floats: normal + 3 vertices)
-    let dataIndex = 0;
-    for (let t = 0; t < totalTriangles; t++) {
-      const triangleOffset = 84 + t * 50;
-
-      // Normal vector (3 floats) - use some variation
-      for (let i = 0; i < 12; i += 4) {
-        const value = dataIndex < dataToStore.length ?
-          dataToStore[dataIndex] / 255.0 * 2 - 1 : // Convert byte to float in range [-1, 1]
-          (Math.random() - 0.5) * 2; // Random value for padding triangles
-        new DataView(result.buffer, triangleOffset + i, 4).setFloat32(0, value, true);
-        dataIndex++;
+    // Apply visual distortion to vertices so it looks encrypted
+    if (password) {
+      const salt = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF]);
+      const key = await CryptoEngine.deriveKey({ password, salt, iterations: 500 });
+      const zeroArray = new Uint8Array(65536);
+      const keystream = new Uint8Array(await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: new Uint8Array(12) }, key, zeroArray
+      ));
+      
+      let kpos = 0;
+      for (let t = 0; t < originalTriCount; t++) {
+        const triOffset = 84 + t * 50;
+        // Distort vertex coordinates slightly (scale by 0.5-1.5)
+        for (let v = 0; v < 3; v++) {
+          for (let c = 0; c < 3; c++) {
+            const floatOffset = triOffset + 12 + v * 12 + c * 4;
+            const origFloat = view.getFloat32(floatOffset, true);
+            const factor = 0.5 + (keystream[kpos % keystream.length] / 255);
+            const newFloat = origFloat * factor;
+            const bytes = new Uint8Array(4);
+            new DataView(bytes.buffer).setFloat32(0, newFloat, true);
+            for (let b = 0; b < 4; b++) {
+              distorted[floatOffset + b] = bytes[b];
+            }
+            kpos++;
+          }
+        }
       }
-
-      // Vertex coordinates (9 floats) - encode more data or use distorted values
-      for (let i = 12; i < 48; i += 4) {
-        const value = dataIndex < dataToStore.length ?
-          dataToStore[dataIndex] / 255.0 * 200 - 100 : // Convert to coordinate range
-          (Math.random() - 0.5) * 200; // Random coordinates for distorted look
-        new DataView(result.buffer, triangleOffset + i, 4).setFloat32(0, value, true);
-        dataIndex++;
-      }
-
-      // Attribute byte count (2 bytes, usually 0)
-      result[triangleOffset + 48] = 0;
-      result[triangleOffset + 49] = 0;
     }
-
-    return new Blob([result], { type: 'application/sla' });
-  }
-
-  static _encodeDistortedGeneric3D(dataBytes, originalBytes) {
-    // Keep the first 64 bytes of the original file (header) to maintain file type recognition
-    const headerSize = Math.min(64, originalBytes.length);
-    const header = originalBytes.slice(0, headerSize);
-
-    // Create a header with data length
-    const lengthHeader = new Uint8Array(4);
-    new DataView(lengthHeader.buffer).setUint32(0, dataBytes.length, true);
-
-    // Combine: header + length + data + padding to match original file size
-    const totalSize = Math.max(originalBytes.length, headerSize + 4 + dataBytes.length);
-    const result = new Uint8Array(totalSize);
-
-    // Copy original header
-    result.set(header, 0);
-
-    // Add length header
-    result.set(lengthHeader, headerSize);
-
-    // Add encrypted data
-    result.set(dataBytes, headerSize + 4);
-
-    // Fill the rest with some pattern to make it look distorted but not completely random
-    for (let i = headerSize + 4 + dataBytes.length; i < totalSize; i++) {
-      result[i] = originalBytes[i % originalBytes.length] ^ 0xAA; // XOR with pattern
-    }
-
+    
+    return new Blob([distorted], { type: 'application/sla' });
+  } else {
+    // Large payload: use fallback (file will be invalid for fstl, but works for other viewers)
+    console.warn('Payload too large for STL attribute embedding, using appended method');
+    const magic = new TextEncoder().encode('CVLT');
+    const lenBuf = new Uint8Array(4);
+    new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
+    
+    const result = new Uint8Array(originalBytes.length + 4 + 4 + dataBytes.length);
+    result.set(originalBytes, 0);
+    result.set(magic, originalBytes.length);
+    result.set(lenBuf, originalBytes.length + 4);
+    result.set(dataBytes, originalBytes.length + 8);
+    
     return new Blob([result], { type: 'application/octet-stream' });
   }
+}
 
-  static async decodeFromDistorted3D(file) {
-    const bytes = new Uint8Array(await FileProcessor.readArrayBuffer(file));
-    const fileName = file.name.toLowerCase();
-
-    // Handle different 3D file formats
-    if (fileName.endsWith('.stl')) {
-      return FileProcessor._decodeDistortedSTL(bytes);
-    } else {
-      // For other 3D formats, use generic approach
-      return FileProcessor._decodeDistortedGeneric3D(bytes);
+static async decodeFromDistorted3D(file) {
+  const bytes = new Uint8Array(await FileProcessor.readArrayBuffer(file));
+  const fileName = file.name.toLowerCase();
+  
+  // Check if this is an STL with embedded data
+  if (fileName.endsWith('.stl') || fileName.endsWith('.stlb')) {
+    try {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const triCount = view.getUint32(80, true);
+      
+      // Check for magic 'CV' in first triangle's attribute bytes
+      const firstAttrOffset = 84 + 48; // first triangle's attribute bytes
+      if (bytes[firstAttrOffset] === 0x43 && bytes[firstAttrOffset + 1] === 0x56) {
+        // Embedded data found
+        const secondAttrOffset = 84 + 50 + 48; // second triangle's attribute bytes
+        const dataLength = (bytes[secondAttrOffset] << 8) | bytes[secondAttrOffset + 1];
+        
+        const payload = new Uint8Array(dataLength);
+        let payloadPos = 0;
+        
+        for (let t = 2; t < triCount && payloadPos < dataLength; t++) {
+          const attrOffset = 84 + t * 50 + 48;
+          const remaining = dataLength - payloadPos;
+          const bytesToRead = Math.min(2, remaining);
+          for (let i = 0; i < bytesToRead; i++) {
+            payload[payloadPos++] = bytes[attrOffset + i];
+          }
+        }
+        
+        if (payloadPos === dataLength) {
+          return payload;
+        }
+      }
+    } catch (err) {
+      console.warn('Embedded data extraction failed, trying appended method', err);
     }
   }
+  
+  // Fallback: search for 'CVLT' magic signature (appended method)
+  const magic = [0x43, 0x56, 0x4C, 0x54];
+  let magicPos = -1;
+  
+  for (let i = bytes.length - 8; i >= 0; i--) {
+    if (bytes[i] === magic[0] && bytes[i+1] === magic[1] && 
+        bytes[i+2] === magic[2] && bytes[i+3] === magic[3]) {
+      magicPos = i;
+      break;
+    }
+  }
+  
+  if (magicPos === -1) {
+    throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.');
+  }
+  
+  const dataLength = new DataView(bytes.buffer, bytes.byteOffset + magicPos + 4, 4).getUint32(0, true);
+  const dataStart = magicPos + 8;
+  
+  if (dataStart + dataLength > bytes.length) {
+    throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.');
+  }
+  
+  return bytes.slice(dataStart, dataStart + dataLength);
+}
 
+  // Keep legacy decode methods for backwards compatibility (files encrypted with old version)
   static _decodeDistortedSTL(bytes) {
-    // Check if this is an encrypted STL (should have 'ENCR' signature)
-    if (bytes.length < 84) {
-      throw new Error('File too small to be a valid encrypted STL');
-    }
-
+    if (bytes.length < 84) throw new Error('File too small to be a valid encrypted STL');
     const signature = new TextDecoder().decode(bytes.slice(76, 80));
-    if (signature !== 'ENCR') {
-      throw new Error('This does not appear to be an encrypted STL file');
-    }
-
-    // Read triangle count
+    if (signature !== 'ENCR') throw new Error('This does not appear to be an encrypted STL file');
     const triangleCount = new DataView(bytes.buffer, 80, 4).getUint32(0, true);
-
-    // Calculate total data that could be stored
-    const maxDataLength = triangleCount * 48; // 48 bytes per triangle
+    const maxDataLength = triangleCount * 48;
     const dataToExtract = new Uint8Array(maxDataLength);
-
-    // Extract data from triangle vertices
     let dataIndex = 0;
     for (let t = 0; t < triangleCount && dataIndex < maxDataLength; t++) {
       const triangleOffset = 84 + t * 50;
-
-      // Extract from all 12 floats (normal + 3 vertices)
       for (let i = 0; i < 48 && dataIndex < maxDataLength; i += 4) {
         const floatValue = new DataView(bytes.buffer, triangleOffset + i, 4).getFloat32(0, true);
-        // Convert back to byte
-        let byteValue;
-        if (t === 0 && i < 12) {
-          // First triangle normal values are in range [-1, 1]
-          byteValue = Math.round((floatValue + 1) / 2 * 255);
-        } else {
-          // Other values are in coordinate range [-100, 100]
-          byteValue = Math.round((floatValue + 100) / 200 * 255);
-        }
-        byteValue = Math.max(0, Math.min(255, byteValue));
-        dataToExtract[dataIndex] = byteValue;
-        dataIndex++;
+        let byteValue = (t === 0 && i < 12) ? Math.round((floatValue + 1) / 2 * 255) : Math.round((floatValue + 100) / 200 * 255);
+        dataToExtract[dataIndex++] = Math.max(0, Math.min(255, byteValue));
       }
     }
-
-    // First 4 bytes should be the length header
-    if (dataToExtract.length < 4) {
-      throw new Error('Not enough data extracted');
-    }
-
     const dataLength = new DataView(dataToExtract.buffer, 0, 4).getUint32(0, true);
-
-    if (dataLength > dataToExtract.length - 4) {
-      throw new Error('Invalid data length in encrypted file');
-    }
-
+    if (dataLength > dataToExtract.length - 4) throw new Error('Invalid data length in encrypted file');
     return dataToExtract.slice(4, 4 + dataLength);
   }
 
   static _decodeDistortedGeneric3D(bytes) {
-    // Skip the header (first 64 bytes or whatever is preserved)
     const headerSize = Math.min(64, bytes.length);
-
-    // Read the length header
-    if (bytes.length < headerSize + 4) {
-      throw new Error('File too small to contain encrypted data');
-    }
-
+    if (bytes.length < headerSize + 4) throw new Error('File too small to contain encrypted data');
     const dataLength = new DataView(bytes.buffer, headerSize, 4).getUint32(0, true);
-
-    // Extract the data
     const dataStart = headerSize + 4;
-    if (dataStart + dataLength > bytes.length) {
-      throw new Error('File corrupted or invalid encrypted data length');
-    }
-
+    if (dataStart + dataLength > bytes.length) throw new Error('File corrupted or invalid encrypted data length');
     return bytes.slice(dataStart, dataStart + dataLength);
   }
 }
@@ -614,12 +635,13 @@ const accountManager = new AccountManager();
 const TextFileCryptoPanel = ({ user }) => {
   const [mode, setMode] = useState('encrypt');
   const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
-  const [processedFile, setProcessedFile] = useState(null);
-  const reset = () => { setError(''); setSuccess(''); setProcessedFile(null); };
+  const reset = () => { setError(''); setSuccess(''); };
 
   const handleFile = (e) => {
     const f = e.target.files?.[0] || null;
@@ -641,7 +663,6 @@ const TextFileCryptoPanel = ({ user }) => {
         const compact = `${payload.salt}:${payload.iv}:${payload.ciphertext}`;
         const outName = `${file.name}.encrypted.txt`;
         FileProcessor.download({ text: compact, name: outName });
-        setProcessedFile({ data: compact, name: outName, mimeType: 'text/plain' });
         await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Text File', data: compact, mimeType: 'text/plain' });
         setSuccess(`Encrypted "${file.name}" and downloaded.`);
       } else {
@@ -652,7 +673,6 @@ const TextFileCryptoPanel = ({ user }) => {
         const plainText = new TextDecoder().decode(plainBytes);
         const outName = FileProcessor.decryptedName(file.name);
         FileProcessor.download({ text: plainText, name: outName });
-        setProcessedFile({ data: plainText, name: outName, mimeType: 'text/plain' });
         await HistoryStore.addRecord(user.email, { file: outName, action: 'Decrypt Text File', data: plainText, mimeType: 'text/plain' });
         setSuccess(`Decrypted "${file.name}" and downloaded.`);
       }
@@ -665,16 +685,24 @@ const TextFileCryptoPanel = ({ user }) => {
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && <Notice type="error">{error}</Notice>}
       {success && <Notice type="success">{success}</Notice>}
-      <ModeToggle value={mode} onChange={m => { setMode(m); setKey(''); reset(); }} />
+      <ModeToggle value={mode} onChange={m => { setMode(m); setKey(''); setFile(null); setShowKey(false); setFileInputKey(v => v + 1); reset(); }} />
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Text File (.txt)</label>
-        <input type="file" accept=".txt,text/plain" onChange={handleFile}
+        <input key={fileInputKey} type="file" accept=".txt,text/plain" onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs" required />
         {file && <p className="text-slate-500 text-xs mt-1.5">Selected: {file.name}</p>}
       </div>
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
-        <KeyInput value={key} onChange={setKey} />
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
+          <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
+            placeholder="Enter encryption key"
+            className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+            {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        </div>
       </div>
       <SubmitBtn processing={processing} mode={mode} />
     </form>
@@ -686,6 +714,7 @@ const TextAreaCryptoPanel = ({ user }) => {
   const [inputText, setInputText] = useState('');
   const [outputText, setOutputText] = useState('');
   const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState('');
   const [processing, setProcessing] = useState(false);
   const reset = () => { setError(''); setOutputText(''); };
@@ -720,7 +749,7 @@ const TextAreaCryptoPanel = ({ user }) => {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && <Notice type="error">{error}</Notice>}
-      <ModeToggle value={mode} onChange={m => { setMode(m); setInputText(''); reset(); setKey(''); }} />
+      <ModeToggle value={mode} onChange={m => { setMode(m); setInputText(''); setKey(''); setShowKey(false); reset(); }} />
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
           {mode === 'encrypt' ? 'Plaintext Input' : 'Encrypted Text Input'}
@@ -731,7 +760,15 @@ const TextAreaCryptoPanel = ({ user }) => {
       </div>
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
-        <KeyInput value={key} onChange={setKey} />
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
+          <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
+            placeholder="Enter encryption key"
+            className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+            {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        </div>
       </div>
       <button type="submit" disabled={processing}
         className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 text-white py-3 rounded-lg hover:from-cyan-500 hover:to-blue-500 font-semibold shadow-lg transition-all disabled:opacity-50 text-sm">
@@ -755,13 +792,14 @@ const ImageCryptoPanel = ({ user }) => {
   const [mode, setMode] = useState('encrypt');
   const [dimension, setDimension] = useState('2d');
   const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
   const [preview, setPreview] = useState(null);
-  const [processedFile, setProcessedFile] = useState(null);
-  const reset = () => { setError(''); setSuccess(''); setProcessedFile(null); };
+  const reset = () => { setError(''); setSuccess(''); };
 
   const handleFile = (e) => {
     const f = e.target.files?.[0] || null;
@@ -771,8 +809,8 @@ const ImageCryptoPanel = ({ user }) => {
       if (dimension === '2d' && !FileProcessor.isImage(f)) return setError('Please select a 2D image file (PNG, JPEG, GIF, etc.).');
       if (dimension === '3d' && !FileProcessor.is3D(f)) return setError('Please select a 3D model file (.glb, .obj, .stl, .fbx).');
     } else {
-      if (dimension === '2d' && !f.name.toLowerCase().endsWith('.png')) return setError('Please select a PNG file.');
-      if (dimension === '3d' && !f.name.includes('.encrypted.')) return setError('Please select an encrypted 3D file (.encrypted.*).');
+      if (dimension === '2d' && !f.name.toLowerCase().endsWith('.png')) return setError('Please select a PNG file (the encrypted output from this app).');
+      // Accept any file for 3D decryption — the encrypted file keeps its original extension
     }
     setFile(f);
     if (mode === 'encrypt' && dimension === '2d') setPreview(URL.createObjectURL(f));
@@ -794,42 +832,39 @@ const ImageCryptoPanel = ({ user }) => {
             dimension 
         });
 
-        if (dimension === '3d') {
-          // For 3D models, create a distorted version that looks like the original file
-          const jsonPayload = new TextEncoder().encode(JSON.stringify(payload));
-          const distortedBlob = await FileProcessor.encodeToDistorted3D(jsonPayload, file);
-          
-          const baseName = file.name.replace(/\.[^/.]+$/, '');
-          const extension = file.name.split('.').pop();
-          const outName = `${baseName}.encrypted.${extension}`;
-          FileProcessor.downloadBytes({ 
-              bytes: new Uint8Array(await distortedBlob.arrayBuffer()), 
-              name: outName, 
-              mimeType: file.type || 'application/octet-stream' 
-          });
-          setProcessedFile({ data: distortedBlob, name: outName, mimeType: file.type || 'application/octet-stream' });
-          
-          await HistoryStore.addRecord(user.email, { 
-              file: outName, 
-              action: 'Encrypt 3D Model', 
-              mimeType: file.type || 'application/octet-stream',
-              data: distortedBlob
-          });
-          setSuccess(`Encrypted 3D model and saved as distorted "${outName}".`);
-        } else {
+if (dimension === '3d') {
+  // For 3D models, create a distorted version that looks like the original file
+  const jsonPayload = new TextEncoder().encode(JSON.stringify(payload));
+  // Pass the encryption key so distortion can be applied to STL files
+  const distortedBlob = await FileProcessor.encodeToDistorted3D(jsonPayload, file, key);
+  
+  const baseName = file.name.replace(/\.[^/.]+$/, '');
+  const extension = file.name.split('.').pop();
+  const outName = `${baseName}.encrypted.${extension}`;
+  FileProcessor.downloadBytes({ 
+    bytes: new Uint8Array(await distortedBlob.arrayBuffer()), 
+    name: outName, 
+    mimeType: file.type || 'application/octet-stream' 
+  });
+  await HistoryStore.addRecord(user.email, { 
+    file: outName, 
+    action: 'Encrypt 3D Model', 
+    mimeType: file.type || 'application/octet-stream',
+    data: distortedBlob
+  });
+  setSuccess(`Encrypted 3D model and saved as distorted "${outName}".`);
+} else {
           // For 2D images, use PNG steganography
           const jsonPayload = new TextEncoder().encode(JSON.stringify(payload));
           const pngBlob = await FileProcessor.encodeToDistortedPng(jsonPayload, file, key);
           
           const baseName = file.name.replace(/\.[^/.]+$/, '');
-          const outName = `${baseName}.png`;
+          const outName = `${baseName}.encrypted.png`;
           FileProcessor.downloadBytes({ 
               bytes: new Uint8Array(await pngBlob.arrayBuffer()), 
               name: outName, 
               mimeType: 'image/png' 
           });
-          setProcessedFile({ data: pngBlob, name: outName, mimeType: 'image/png' });
-          
           await HistoryStore.addRecord(user.email, { 
               file: outName, 
               action: 'Encrypt Image', 
@@ -845,19 +880,27 @@ const ImageCryptoPanel = ({ user }) => {
         if (dimension === '3d') {
           // Handle distorted 3D files
           jsonBytes = await FileProcessor.decodeFromDistorted3D(file);
+          // Validate and clean extracted bytes — find the JSON boundaries
+          const text = new TextDecoder().decode(jsonBytes);
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          if (start === -1 || end === -1) throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.');
+          try { payload = JSON.parse(text.slice(start, end + 1)); }
+          catch { throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.'); }
         } else {
           // Handle PNG steganography for 2D images
           jsonBytes = await FileProcessor.decodeFromDistortedPng(file, key);
         }
         
-        try { payload = JSON.parse(new TextDecoder().decode(jsonBytes)); }
-        catch { throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.'); }
+        if (!payload) {
+          try { payload = JSON.parse(new TextDecoder().decode(jsonBytes)); }
+          catch { throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.'); }
+        }
         if (payload.algorithm !== 'AES-256-GCM') throw new Error('Unsupported algorithm.');
         const plainBytes = await CryptoEngine.decrypt({ payload, password: key });
         const mimeType = payload.mimeType || (payload.dimension === '3d' ? 'application/octet-stream' : 'image/png');
         const originalName = payload.originalName || (payload.dimension === '3d' ? FileProcessor.decrypted3DName(file.name) : FileProcessor.decryptedImageName(file.name));
         FileProcessor.downloadBytes({ bytes: plainBytes, name: originalName, mimeType });
-        setProcessedFile({ data: plainBytes, name: originalName, mimeType });
         await HistoryStore.addRecord(user.email, { file: originalName, action: `Decrypt ${payload.dimension === '3d' ? '3D Model' : 'Image'}`, mimeType, data: plainBytes });
         setSuccess(`Decrypted ${payload.dimension === '3d' ? '3D model' : 'image'} and downloaded as "${originalName}".`);
       }
@@ -871,7 +914,7 @@ const ImageCryptoPanel = ({ user }) => {
       {error && <Notice type="error">{error}</Notice>}
       {success && <Notice type="success">{success}</Notice>}
       <div className="flex flex-col gap-3">
-        <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
+        <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); setShowKey(false); setFileInputKey(v => v + 1); reset(); }} />
         {mode === 'encrypt' && (
           <div className="flex gap-2 p-1 bg-slate-900/40 rounded-lg border border-slate-700/50">
             {[{ id: '2d', label: '2D Image', icon: Layers }, { id: '3d', label: '3D Model', icon: Box }].map(d => (
@@ -885,10 +928,10 @@ const ImageCryptoPanel = ({ user }) => {
       </div>
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          {mode === 'encrypt' ? (dimension === '2d' ? 'Image File (PNG, JPEG, GIF...)' : '3D Model File (.glb, .obj, .stl...)') : (dimension === '2d' ? 'Image File (.png)' : 'Encrypted 3D File (.encrypted.*)')}
+          {mode === 'encrypt' ? (dimension === '2d' ? 'Image File (PNG, JPEG, GIF...)' : '3D Model File (.glb, .obj, .stl...)') : (dimension === '2d' ? 'Encrypted Image File (.png)' : 'Encrypted 3D File (any format encrypted by this app)')}
         </label>
-        <input type="file"
-          accept={mode === 'encrypt' ? (dimension === '2d' ? 'image/*' : '.glb,.gltf,.obj,.stl,.fbx') : (dimension === '2d' ? '.png' : '.encrypted.*')}
+        <input key={fileInputKey} type="file"
+          accept={mode === 'encrypt' ? (dimension === '2d' ? 'image/*' : '.glb,.gltf,.obj,.stl,.fbx') : (dimension === '2d' ? '.png' : '.glb,.gltf,.obj,.stl,.fbx,.encrypted.*,*')}
           onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs" required />
         {file && <p className="text-slate-500 text-xs mt-1.5">Selected: {file.name}</p>}
@@ -906,7 +949,15 @@ const ImageCryptoPanel = ({ user }) => {
       </div>
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
-        <KeyInput value={key} onChange={setKey} />
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
+          <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
+            placeholder="Enter encryption key"
+            className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+            {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        </div>
       </div>
       <SubmitBtn processing={processing} mode={mode}
         label={`${mode === 'encrypt' ? 'Encrypt' : 'Decrypt'} ${dimension === '2d' ? 'Image' : '3D Model'} & Download`} />
@@ -917,7 +968,9 @@ const ImageCryptoPanel = ({ user }) => {
 const DatasetCryptoPanel = ({ user }) => {
   const [mode, setMode] = useState('encrypt');
   const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
@@ -1008,12 +1061,12 @@ const DatasetCryptoPanel = ({ user }) => {
     <form onSubmit={handleSubmit} className="space-y-4">
       {error && <Notice type="error">{error}</Notice>}
       {success && <Notice type="success">{success}</Notice>}
-      <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
+      <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); setShowKey(false); setFileInputKey(v => v + 1); reset(); }} />
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
           {mode === 'encrypt' ? 'Dataset File (.csv, .xlsx)' : 'Encrypted Dataset File (.encrypted.csv)'}
         </label>
-        <input type="file"
+        <input key={fileInputKey} type="file"
           accept={mode === 'encrypt' ? '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : '.csv,.encrypted.csv'}
           onChange={handleFile}
           className="w-full bg-slate-900 border border-slate-600/80 text-slate-300 rounded-lg p-3 text-sm file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-700 file:text-white file:text-xs" required />
@@ -1049,7 +1102,15 @@ const DatasetCryptoPanel = ({ user }) => {
       )}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
-        <KeyInput value={key} onChange={setKey} />
+        <div className="relative">
+          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
+          <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
+            placeholder="Enter encryption key"
+            className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
+            {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
+          </button>
+        </div>
       </div>
       <SubmitBtn processing={processing} mode={mode} label={mode === 'encrypt' ? 'Encrypt Dataset & Download' : 'Decrypt Dataset & Download'} />
     </form>

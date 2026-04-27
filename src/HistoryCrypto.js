@@ -12,6 +12,11 @@ export class HistoryStore {
 
   static async init() {
     return new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') {
+        this.db = null;
+        resolve(null);
+        return;
+      }
       const request = indexedDB.open(this.DB_NAME, this.VERSION);
       request.onerror = (e) => reject(`IndexedDB Error: ${e.target.error}`);
       request.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
@@ -30,6 +35,7 @@ export class HistoryStore {
   // =========================================================================
   static async addRecord(email, record) {
     if (!this.db) await this.init();
+    if (!this.db) return null;
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([this.STORE_NAME], 'readwrite');
       const store = transaction.objectStore(this.STORE_NAME);
@@ -45,6 +51,7 @@ export class HistoryStore {
   // =========================================================================
   static async getRecords(email) {
     if (!this.db) await this.init();
+    if (!this.db) return [];
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([this.STORE_NAME], 'readonly');
       const store = transaction.objectStore(this.STORE_NAME);
@@ -60,6 +67,7 @@ export class HistoryStore {
   // =========================================================================
   static async deleteRecord(id) {
     if (!this.db) await this.init();
+    if (!this.db) return;
     return new Promise((resolve, reject) => {
       const transaction = this.db.transaction([this.STORE_NAME], 'readwrite');
       const store = transaction.objectStore(this.STORE_NAME);
@@ -179,7 +187,7 @@ export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => 
               ========================================================================= */}
               <tbody>
                 {history.slice().reverse().map((record, i) => (
-                  <tr key={i} className={i % 2 === 0 ? 'bg-slate-900/40' : 'bg-slate-900/70'}>
+                  <tr key={record.id ?? i} className={i % 2 === 0 ? 'bg-slate-900/40' : 'bg-slate-900/70'}>
                     <td className="px-4 py-3 text-slate-300 border-b border-slate-800/60 whitespace-nowrap">
                       {new Date(record.date).toLocaleString()}
                     </td>
