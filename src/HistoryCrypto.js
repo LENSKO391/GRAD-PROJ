@@ -1,144 +1,156 @@
 import React, { useEffect, useState } from 'react';
 import { Clock, Download, Trash2 } from 'lucide-react';
-import {
-  uploadEncryptedFile,
-  getHistoryRecords,
-  deleteHistoryRecord,
-  deleteAllHistoryRecords,
-} from './FirebaseStorage';
 
 // =========================================================================
-// SECTION 1: David
+// SECTION 1: David 
 // =========================================================================
 export class HistoryStore {
-  // Legacy init kept for backwards compatibility (no-op now)
-  static async init() { return null; }
+  static DB_NAME = 'CipherVaultDB';
+  static STORE_NAME = 'historyRecords';
+  static VERSION = 1;
+  static db = null;
+
+  static async init() {
+    return new Promise((resolve, reject) => {
+      if (typeof indexedDB === 'undefined') {
+        this.db = null;
+        resolve(null);
+        return;
+      }
+      const request = indexedDB.open(this.DB_NAME, this.VERSION);
+      request.onerror = (e) => reject(`IndexedDB Error: ${e.target.error}`);
+      request.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+          const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id', autoIncrement: true });
+          store.createIndex('email', 'email', { unique: false });
+        }
+      };
+    });
+  }
 
   // =========================================================================
   // SECTION 2: George
   // =========================================================================
-  /**
-   * Upload an encrypted file to Firebase Storage and record it in Firestore.
-   * @param {string} email
-   * @param {{ file: string, action: string, blob: Blob, mimeType: string }} record
-   */
   static async addRecord(email, record) {
-    try {
-      const blob = record.blob instanceof Blob
-        ? record.blob
-        : new Blob(
-            [typeof record.data === 'string' ? record.data : record.data],
-            { type: record.mimeType || 'application/octet-stream' }
-          );
-      await uploadEncryptedFile(email, blob, record.file, record.action, record.mimeType || 'application/octet-stream');
-    } catch (e) {
-      console.error('HistoryStore.addRecord error:', e);
-    }
+    if (!this.db) await this.init();
+    if (!this.db) return null;
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([this.STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(this.STORE_NAME);
+      const data = { email, ...record, date: new Date().toISOString() };
+      const request = store.add(data);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = (e) => reject(`Add Error: ${e.target.error}`);
+    });
   }
 
   // =========================================================================
-  // SECTION 3: Hana
+  // SECTION 3: Hana 
   // =========================================================================
   static async getRecords(email) {
-    try {
-      return await getHistoryRecords(email);
-    } catch (e) {
-      console.error('HistoryStore.getRecords error:', e);
-      return [];
-    }
+    if (!this.db) await this.init();
+    if (!this.db) return [];
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([this.STORE_NAME], 'readonly');
+      const store = transaction.objectStore(this.STORE_NAME);
+      const index = store.index('email');
+      const request = index.getAll(email);
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = (e) => reject(`Get Error: ${e.target.error}`);
+    });
   }
 
   // =========================================================================
   // SECTION 4: Eyad
   // =========================================================================
-  static async deleteRecord(record) {
-    try {
-      await deleteHistoryRecord(record);
-    } catch (e) {
-      console.error('HistoryStore.deleteRecord error:', e);
-    }
-  }
-
-  static async deleteAllRecords(email) {
-    try {
-      await deleteAllHistoryRecords(email);
-    } catch (e) {
-      console.error('HistoryStore.deleteAllRecords error:', e);
-    }
+  static async deleteRecord(id) {
+    if (!this.db) await this.init();
+    if (!this.db) return;
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction([this.STORE_NAME], 'readwrite');
+      const store = transaction.objectStore(this.STORE_NAME);
+      const request = store.delete(id);
+      request.onsuccess = () => resolve();
+      request.onerror = (e) => reject(`Delete Error: ${e.target.error}`);
+    });
   }
 }
 
 // =========================================================================
-// SECTION 5: Gamal
+// SECTION 5: Gamal 
 // =========================================================================
-export const HistoryPanel = ({ user, HistoryStore }) => {
+export const HistoryPanel = ({ user, HistoryStore, FileProcessor, fromB64 }) => {
   const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteRecord, setDeleteRecord] = useState(null);
+  const [deleteId, setDeleteId] = useState(null);
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
 
   useEffect(() => {
-    setLoading(true);
-    HistoryStore.getRecords(user.email)
-      .then(records => setHistory(records))
-      .finally(() => setLoading(false));
+    HistoryStore.getRecords(user.email).then(records => setHistory(records));
   }, [user.email, HistoryStore]);
 
   const handleDownload = (record) => {
-    if (!record.downloadURL) return alert('Download link not available.');
-    window.open(record.downloadURL, '_blank');
+    if (!record.data) return alert("File data missing from this record.");
+    if (record.isBase64) {
+      FileProcessor.downloadBytes({ bytes: fromB64(record.data), name: record.file, mimeType: record.mimeType });
+    } else {
+      FileProcessor.download({ text: record.data, name: record.file, mimeType: record.mimeType });
+    }
   };
 
   // =========================================================================
-  // SECTION 6: Moaz
+  // SECTION 6: Moaz 
   // =========================================================================
-  const handleDelete = (record) => {
-    setDeleteRecord(record);
+  const handleDelete = async (id) => {
+    setDeleteId(id);
     setShowDeleteConfirm(true);
   };
 
   const confirmDelete = async () => {
-    if (!deleteRecord) return;
+    if (!deleteId) return;
     try {
-      await HistoryStore.deleteRecord(deleteRecord);
-      setHistory(history.filter(r => r.id !== deleteRecord.id));
-    } catch (e) {
-      alert('Failed to delete record: ' + e);
-    } finally {
+      await HistoryStore.deleteRecord(deleteId);
+      setHistory(history.filter(r => r.id !== deleteId));
       setShowDeleteConfirm(false);
-      setDeleteRecord(null);
+      setDeleteId(null);
+    } catch (e) {
+      alert("Failed to delete record: " + e);
+      setShowDeleteConfirm(false);
+      setDeleteId(null);
     }
   };
 
   const cancelDelete = () => {
     setShowDeleteConfirm(false);
-    setDeleteRecord(null);
+    setDeleteId(null);
   };
 
-  const handleDeleteAll = () => setShowDeleteAllConfirm(true);
+  const handleDeleteAll = () => {
+    setShowDeleteAllConfirm(true);
+  };
 
   const confirmDeleteAll = async () => {
     try {
-      await HistoryStore.deleteAllRecords(user.email);
+      for (const record of history) {
+        await HistoryStore.deleteRecord(record.id);
+      }
       setHistory([]);
+      setShowDeleteAllConfirm(false);
     } catch (e) {
-      alert('Failed to delete all records: ' + e);
-    } finally {
+      alert("Failed to delete all records: " + e);
       setShowDeleteAllConfirm(false);
     }
   };
 
-  const cancelDeleteAll = () => setShowDeleteAllConfirm(false);
+  const cancelDeleteAll = () => {
+    setShowDeleteAllConfirm(false);
+  };
 
   return (
     <div className="space-y-4">
-      {loading ? (
-        <div className="text-center py-8 text-slate-400">
-          <Clock size={48} className="mx-auto mb-3 opacity-20 animate-pulse" />
-          <p>Loading history from cloud…</p>
-        </div>
-      ) : history.length === 0 ? (
+      {history.length === 0 ? (
         <div className="text-center py-8 text-slate-400">
           <Clock size={48} className="mx-auto mb-3 opacity-20" />
           <p>No activity history found for this account.</p>
@@ -170,10 +182,10 @@ export const HistoryPanel = ({ user, HistoryStore }) => {
                 </tr>
               </thead>
               {/* =========================================================================
-              SECTION 7: Eslam
+              SECTION 7: Eslam 
               ========================================================================= */}
               <tbody>
-                {history.map((record, i) => (
+                {history.slice().reverse().map((record, i) => (
                   <tr key={record.id ?? i} className={i % 2 === 0 ? 'bg-slate-900/40' : 'bg-slate-900/70'}>
                     <td className="px-4 py-3 text-slate-300 border-b border-slate-800/60 whitespace-nowrap">
                       {new Date(record.date).toLocaleString()}
@@ -188,12 +200,12 @@ export const HistoryPanel = ({ user, HistoryStore }) => {
                     </td>
                     <td className="px-4 py-3 text-slate-300 border-b border-slate-800/60 text-right">
                       <div className="flex justify-end gap-2">
-                        <button onClick={() => handleDownload(record)} disabled={!record.downloadURL} title="Download from Cloud"
+                        <button onClick={() => handleDownload(record)} disabled={!record.data} title="Download"
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-md text-xs font-semibold transition-colors">
                           <Download size={12} />
                           <span className="hidden sm:inline">Download</span>
                         </button>
-                        <button onClick={() => handleDelete(record)} title="Delete Log"
+                        <button onClick={() => handleDelete(record.id)} title="Delete Log"
                           className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-red-700/20 hover:bg-red-700/80 text-red-500 hover:text-white rounded-md text-xs font-semibold transition-colors">
                           <Trash2 size={13} />
                         </button>
@@ -213,7 +225,7 @@ export const HistoryPanel = ({ user, HistoryStore }) => {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-slate-200 mb-4">Confirm Deletion</h3>
-            <p className="text-slate-300 mb-6">Are you sure you want to delete this history log and its file from cloud storage? This action cannot be undone.</p>
+            <p className="text-slate-300 mb-6">Are you sure you want to delete this history log? This action cannot be undone.</p>
             <div className="flex justify-end gap-3">
               <button onClick={cancelDelete} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md font-medium transition-colors">Cancel</button>
               <button onClick={confirmDelete} className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-md font-medium transition-colors">Delete</button>
@@ -228,7 +240,7 @@ export const HistoryPanel = ({ user, HistoryStore }) => {
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-semibold text-slate-200 mb-4">Confirm Delete All</h3>
             <p className="text-slate-300 mb-2">Are you sure you want to delete all {history.length} history logs?</p>
-            <p className="text-red-400 text-sm mb-6">This will permanently delete all files from cloud storage and cannot be undone.</p>
+            <p className="text-red-400 text-sm mb-6">This action cannot be undone and will permanently remove all your activity history.</p>
             <div className="flex justify-end gap-3">
               <button onClick={cancelDeleteAll} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-md font-medium transition-colors">Cancel</button>
               <button onClick={confirmDeleteAll} className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-md font-medium transition-colors">Delete All</button>

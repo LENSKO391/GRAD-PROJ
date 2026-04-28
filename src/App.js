@@ -662,10 +662,9 @@ const TextFileCryptoPanel = ({ user }) => {
         const payload = await CryptoEngine.encrypt({ plainBytes: new TextEncoder().encode(text), password: key });
         const compact = `${payload.salt}:${payload.iv}:${payload.ciphertext}`;
         const outName = `${file.name}.encrypted.txt`;
-        const blob = new Blob([compact], { type: 'text/plain' });
         FileProcessor.download({ text: compact, name: outName });
-        await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Text File', blob, mimeType: 'text/plain' });
-        setSuccess(`Encrypted "${file.name}" and uploaded to cloud.`);
+        await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Text File', data: compact, mimeType: 'text/plain' });
+        setSuccess(`Encrypted "${file.name}" and downloaded.`);
       } else {
         const parts = text.trim().split(':');
         if (parts.length < 3) throw new Error('Could not parse encrypted file. Make sure it was encrypted by this app.');
@@ -673,10 +672,9 @@ const TextFileCryptoPanel = ({ user }) => {
         const plainBytes = await CryptoEngine.decrypt({ payload: { salt, iv, ciphertext: rest.join(':'), algorithm: 'AES-256-GCM', iterations: 250000 }, password: key });
         const plainText = new TextDecoder().decode(plainBytes);
         const outName = FileProcessor.decryptedName(file.name);
-        const blob = new Blob([plainText], { type: 'text/plain' });
         FileProcessor.download({ text: plainText, name: outName });
-        await HistoryStore.addRecord(user.email, { file: outName, action: 'Decrypt Text File', blob, mimeType: 'text/plain' });
-        setSuccess(`Decrypted "${file.name}" and uploaded to cloud.`);
+        await HistoryStore.addRecord(user.email, { file: outName, action: 'Decrypt Text File', data: plainText, mimeType: 'text/plain' });
+        setSuccess(`Decrypted "${file.name}" and downloaded.`);
       }
     } catch (err) {
       setError(err.message || 'Operation failed. Check your key and try again.');
@@ -731,9 +729,8 @@ const TextAreaCryptoPanel = ({ user }) => {
         const payload = await CryptoEngine.encrypt({ plainBytes: new TextEncoder().encode(inputText), password: key });
         const compact = `${payload.salt}:${payload.iv}:${payload.ciphertext}`;
         setOutputText(compact);
-        const blob = new Blob([compact], { type: 'text/plain' });
         FileProcessor.download({ text: compact, name: 'encrypted_snippet.txt' });
-        await HistoryStore.addRecord(user.email, { file: 'encrypted_snippet.txt', action: 'Encrypt Plain Text', blob, mimeType: 'text/plain' });
+        await HistoryStore.addRecord(user.email, { file: 'encrypted_snippet.txt', action: 'Encrypt Plain Text', data: compact, mimeType: 'text/plain' });
       } else {
         const parts = inputText.trim().split(':');
         if (parts.length < 3) throw new Error('Invalid encrypted text. Make sure it was encrypted by this app.');
@@ -741,9 +738,8 @@ const TextAreaCryptoPanel = ({ user }) => {
         const plainBytes = await CryptoEngine.decrypt({ payload: { salt, iv, ciphertext: rest.join(':'), algorithm: 'AES-256-GCM', iterations: 250000 }, password: key });
         const plainText = new TextDecoder().decode(plainBytes);
         setOutputText(plainText);
-        const blob = new Blob([plainText], { type: 'text/plain' });
         FileProcessor.download({ text: plainText, name: 'decrypted_snippet.txt' });
-        await HistoryStore.addRecord(user.email, { file: 'decrypted_snippet.txt', action: 'Decrypt Plain Text', blob, mimeType: 'text/plain' });
+        await HistoryStore.addRecord(user.email, { file: 'decrypted_snippet.txt', action: 'Decrypt Plain Text', data: plainText, mimeType: 'text/plain' });
       }
     } catch (err) {
       setError(err.message || 'Operation failed. Check your key and try again.');
@@ -837,9 +833,7 @@ const ImageCryptoPanel = ({ user }) => {
         });
 
 if (dimension === '3d') {
-  // For 3D models, create a distorted version that looks like the original file
   const jsonPayload = new TextEncoder().encode(JSON.stringify(payload));
-  // Pass the encryption key so distortion can be applied to STL files
   const distortedBlob = await FileProcessor.encodeToDistorted3D(jsonPayload, file, key);
   
   const baseName = file.name.replace(/\.[^/.]+$/, '');
@@ -853,12 +847,11 @@ if (dimension === '3d') {
   await HistoryStore.addRecord(user.email, { 
     file: outName, 
     action: 'Encrypt 3D Model', 
-    blob: distortedBlob,
-    mimeType: file.type || 'application/octet-stream'
+    mimeType: file.type || 'application/octet-stream',
+    data: distortedBlob
   });
-  setSuccess(`Encrypted 3D model, downloaded and uploaded to cloud.`);
+  setSuccess(`Encrypted 3D model and saved as distorted "${outName}".`);
 } else {
-          // For 2D images, use PNG steganography
           const jsonPayload = new TextEncoder().encode(JSON.stringify(payload));
           const pngBlob = await FileProcessor.encodeToDistortedPng(jsonPayload, file, key);
           
@@ -872,10 +865,10 @@ if (dimension === '3d') {
           await HistoryStore.addRecord(user.email, { 
               file: outName, 
               action: 'Encrypt Image', 
-              blob: pngBlob,
-              mimeType: 'image/png'
+              mimeType: 'image/png',
+              data: pngBlob
           });
-          setSuccess(`Encrypted image, downloaded and uploaded to cloud.`);
+          setSuccess(`Encrypted and saved as PNG with hidden data.`);
         }
       } else {
         let jsonBytes;
@@ -905,9 +898,8 @@ if (dimension === '3d') {
         const mimeType = payload.mimeType || (payload.dimension === '3d' ? 'application/octet-stream' : 'image/png');
         const originalName = payload.originalName || (payload.dimension === '3d' ? FileProcessor.decrypted3DName(file.name) : FileProcessor.decryptedImageName(file.name));
         FileProcessor.downloadBytes({ bytes: plainBytes, name: originalName, mimeType });
-        const decryptedBlob = new Blob([plainBytes], { type: mimeType });
-        await HistoryStore.addRecord(user.email, { file: originalName, action: `Decrypt ${payload.dimension === '3d' ? '3D Model' : 'Image'}`, blob: decryptedBlob, mimeType });
-        setSuccess(`Decrypted ${payload.dimension === '3d' ? '3D model' : 'image'}, downloaded and uploaded to cloud.`);
+        await HistoryStore.addRecord(user.email, { file: originalName, action: `Decrypt ${payload.dimension === '3d' ? '3D Model' : 'Image'}`, mimeType, data: plainBytes });
+        setSuccess(`Decrypted ${payload.dimension === '3d' ? '3D model' : 'image'} and downloaded as "${originalName}".`);
       }
     } catch (err) {
       setError(err.message || 'Operation failed.');
@@ -1041,9 +1033,8 @@ const DatasetCryptoPanel = ({ user }) => {
         const csvContent = csvRows.join('\n');
         const outName = `${file.name}.encrypted.csv`;
         await FileProcessor.download({ text: csvContent, name: outName, mimeType: 'text/csv;charset=utf-8' });
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-        await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Dataset', blob, mimeType: 'text/csv;charset=utf-8' });
-        setSuccess(`Encrypted "${file.name}", downloaded and uploaded to cloud.`);
+        await HistoryStore.addRecord(user.email, { file: outName, action: 'Encrypt Dataset', data: csvContent, mimeType: 'text/csv;charset=utf-8' });
+        setSuccess(`Encrypted "${file.name}" and downloaded as .csv.`);
       } else {
         const lines = (await file.text()).split(/\r?\n/).filter(l => l.trim());
         let payloadMap;
@@ -1055,9 +1046,8 @@ const DatasetCryptoPanel = ({ user }) => {
         const mimeType = payloadMap.mimeType || 'text/csv';
         const originalName = FileProcessor.decryptedDatasetName(file.name, payloadMap.originalName);
         await FileProcessor.downloadBytes({ bytes: plainBytes, name: originalName, mimeType });
-        const blob = new Blob([plainBytes], { type: mimeType });
-        await HistoryStore.addRecord(user.email, { file: originalName, action: 'Decrypt Dataset', blob, mimeType });
-        setSuccess(`Decrypted "${originalName}", downloaded and uploaded to cloud.`);
+        await HistoryStore.addRecord(user.email, { file: originalName, action: 'Decrypt Dataset', data: toB64(plainBytes.buffer), isBase64: true, mimeType });
+        setSuccess(`Decrypted and downloaded as "${originalName}".`);
       }
     } catch (err) {
       setError(err.message || 'Operation failed. Check your key and try again.');
