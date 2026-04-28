@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Encryption & Decryption Process Diagrams</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; }
+        .diagram-container { background: #fff; padding: 20px; margin-bottom: 40px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        h2 { color: #444; border-bottom: 2px solid #ddd; padding-bottom: 5px; }
+        h3 { color: #666; }
+        .mermaid { display: flex; justify-content: center; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+    <h1>CipherVault Process Diagrams</h1>
+    <p style="text-align: center;">You can right-click on any diagram to copy or save the image, or take a screenshot.</p>
+
+    <!-- 1. Text -->
+    <div class="diagram-container">
+        <h2>1. Text Files (.txt)</h2>
+        <h3>Text Encryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff,border-radius:5px
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Plain Text File .txt]:::input --> B[Read file text content]:::process
+    B --> C[Convert text to byte array TextEncoder]:::process
+    C --> D{Crypto Engine}:::crypto
+    
+    D -->|1| E[Generate random Salt 16B & IV 12B]:::crypto
+    D -->|2| F[Derive Key PBKDF2 + SHA-256]:::crypto
+    D -->|3| G[Encrypt using AES-256-GCM]:::crypto
+    
+    G --> H[Combine payload: salt:iv:ciphertext]:::process
+    H --> I[Output: Encrypted File .aes256.txt]:::output
+        </div>
+
+        <h3>Text Decryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Encrypted Text .aes256.txt]:::input --> B[Read text and split by ':']:::process
+    B --> C[Extract Salt, IV, and Ciphertext]:::process
+    C --> D{Crypto Engine}:::crypto
+    
+    D -->|1| E[Derive Key PBKDF2 with Salt]:::crypto
+    D -->|2| F[Decrypt using AES-256-GCM & IV]:::crypto
+    
+    F --> G[Convert bytes to text TextDecoder]:::process
+    G --> H[Output: Decrypted Text File]:::output
+        </div>
+    </div>
+
+    <!-- 2. Images -->
+    <div class="diagram-container">
+        <h2>2. Image Files (Steganography / Distorted PNG)</h2>
+        <h3>Image Encryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef stego fill:#553c9a,stroke:#b794f4,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Image File PNG/JPG]:::input --> B[Read file as ArrayBuffer]:::process
+    B --> C{Crypto Engine}:::crypto
+    
+    C --> D[Encrypt using AES-256-GCM]:::crypto
+    D --> E[Create JSON Payload]:::process
+    E -.->|Contains| F[Ciphertext, Salt, IV, MimeType, Name]:::process
+    
+    F --> G{Steganography Container}:::stego
+    G -->|Pack Data| H[Embed payload bytes into RGB pixels]:::stego
+    G -->|Obfuscate| I[Fill remaining pixels with random noise]:::stego
+    
+    H & I --> J[Output: Distorted Image .aes256.png]:::output
+        </div>
+
+        <h3>Image Decryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef stego fill:#553c9a,stroke:#b794f4,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Distorted Image .aes256.png]:::input --> B{Steganography Parser}:::stego
+    B --> C[Extract RGB pixels from binary PNG]:::stego
+    C --> D[Read length header and extract JSON payload bytes]:::stego
+    
+    D --> E[Parse JSON to get Ciphertext, Salt, IV]:::process
+    E --> F{Crypto Engine}:::crypto
+    F --> G[Decrypt using AES-256-GCM]:::crypto
+    
+    G --> H[Restore original file using MimeType/Name]:::process
+    H --> I[Output: Original Image File]:::output
+        </div>
+    </div>
+
+    <!-- 3. 3D Models -->
+    <div class="diagram-container">
+        <h2>3. 3D Models (.stl, .obj, .glb)</h2>
+        <h3>3D Model Encryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: 3D Model File]:::input --> B[Read file as binary ArrayBuffer]:::process
+    B --> C{Crypto Engine}:::crypto
+    
+    C --> D[Generate Salt & IV]:::crypto
+    C --> E[Derive Key & Encrypt AES-256-GCM]:::crypto
+    
+    D & E --> F[Create JSON payload with 'dimension: 3d']:::process
+    F --> G[Convert JSON object to String Blob]:::process
+    
+    G --> H[Output: Encrypted JSON File .aes256]:::output
+        </div>
+
+        <h3>3D Model Decryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Encrypted 3D File .aes256]:::input --> B[Read JSON payload]:::process
+    B --> C[Extract Ciphertext, Salt, IV]:::process
+    C --> D{Crypto Engine}:::crypto
+    
+    D --> E[Derive Key PBKDF2]:::crypto
+    D --> F[Decrypt using AES-256-GCM]:::crypto
+    
+    E & F --> G[Reconstruct binary ArrayBuffer]:::process
+    G --> H[Output: Original 3D Model File]:::output
+        </div>
+    </div>
+
+    <!-- 4. Datasets -->
+    <div class="diagram-container">
+        <h2>4. Datasets (.csv, .xlsx)</h2>
+        <h3>Dataset Encryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef format fill:#2c5282,stroke:#63b3ed,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Dataset .csv / .xlsx]:::input --> B[Read file as ArrayBuffer]:::process
+    B --> C{Crypto Engine}:::crypto
+    
+    C --> D[Encrypt using AES-256-GCM]:::crypto
+    D --> E[Create JSON Payload MimeType & Name]:::process
+    
+    E --> F{Serialization & Formatting}:::format
+    F --> G[URI Encode & Base64 Encode payload]:::format
+    F --> H[Split base64 string into 30,000 char chunks]:::format
+    F --> I[Join chunks with newlines]:::format
+    
+    I --> J[Output: Encrypted Dataset .encrypted.csv]:::output
+        </div>
+
+        <h3>Dataset Decryption Process</h3>
+        <div class="mermaid">
+graph TD
+    classDef input fill:#2b3a42,stroke:#4fd1c5,stroke-width:2px,color:#fff
+    classDef process fill:#3f525c,stroke:#90cdf4,stroke-width:2px,color:#fff
+    classDef crypto fill:#5c2c35,stroke:#fc8181,stroke-width:2px,color:#fff
+    classDef format fill:#2c5282,stroke:#63b3ed,stroke-width:2px,color:#fff
+    classDef output fill:#2c4c3b,stroke:#68d391,stroke-width:2px,color:#fff
+
+    A[Input: Encrypted Dataset .encrypted.csv]:::input --> B{Deserialization}:::format
+    B --> C[Read text and filter out newlines]:::format
+    B --> D[Base64 Decode & URI Decode]:::format
+    B --> E[Parse JSON payload]:::format
+    
+    E --> F[Extract Ciphertext, Salt, IV]:::process
+    F --> G{Crypto Engine}:::crypto
+    G --> H[Decrypt using AES-256-GCM]:::crypto
+    
+    H --> I[Restore file using original MimeType & Name]:::process
+    I --> J[Output: Original Dataset File]:::output
+        </div>
+    </div>
+
+</body>
+</html>

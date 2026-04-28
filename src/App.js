@@ -773,24 +773,22 @@ const ImageCryptoPanel = () => {
       <div className="flex flex-col gap-3">
         <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); reset(); }} />
         
-        {mode === 'encrypt' && (
-          <div className="flex gap-2 p-1 bg-slate-900/40 rounded-lg border border-slate-700/50">
-            {[
-              { id: '2d', label: '2D Image', icon: Layers },
-              { id: '3d', label: '3D Model', icon: Box }
-            ].map(d => (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => { setDimension(d.id); setFile(null); setPreview(null); reset(); }}
-                className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-xs font-medium transition-all ${dimension === d.id ? 'bg-slate-700 text-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}
-              >
-                <d.icon size={13} />
-                {d.label}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex gap-2 p-1 bg-slate-900/40 rounded-lg border border-slate-700/50">
+          {[
+            { id: '2d', label: '2D Image', icon: Layers },
+            { id: '3d', label: '3D Model', icon: Box }
+          ].map(d => (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => { setDimension(d.id); setFile(null); setPreview(null); reset(); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-xs font-medium transition-all ${dimension === d.id ? 'bg-slate-700 text-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              <d.icon size={13} />
+              {d.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div>
