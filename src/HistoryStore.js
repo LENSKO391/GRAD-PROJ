@@ -1,88 +1,122 @@
-import { db, storage } from './FirebaseAuth';
+import { auth, db } from './FirebaseAuth';
 import { collection, addDoc, getDocs, deleteDoc, query, where, serverTimestamp, doc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+
+// No Firebase Storage import — Storage requires a paid plan.
+// History records are saved as metadata-only logs in Firestore.
+// The file itself is still downloaded to the user's device as normal;
+// it just won't be re-downloadable from the history panel.
 
 export class HistoryStore {
-    static async addRecord(email, record) {
-        if (!db) throw new Error("Firebase DB not initialized. Please configure API Keys in FirebaseAuth.js");
-
-        let downloadURL = null;
-        let storagePath = null;
-        
-        let fileBlob = null;
-        if (record.data) {
-            if (record.data instanceof Blob || record.data instanceof File) {
-                fileBlob = record.data;
-            } else if (typeof record.data === 'string' || record.data instanceof Uint8Array) {
-                fileBlob = new Blob([record.data], { type: record.mimeType || 'application/octet-stream' });
-            }
-        }
-
-        // 1. Upload heavy file if included
-        if (fileBlob) {
-            if (!storage) throw new Error("Firebase Storage not initialized.");
-            const safeName = record.file.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-            const fileId = Date.now().toString() + Math.floor(Math.random() * 1000);
-            storagePath = `user-files/${email}/${fileId}_${safeName}`;
-            
-            const fileRef = ref(storage, storagePath);
-            await uploadBytes(fileRef, fileBlob);
-            downloadURL = await getDownloadURL(fileRef);
-        }
-
-        // 2. Save document to Cloud Firestore
-        const historyRef = collection(db, "historyRecords");
-        const docData = {
-            email,
-            file: record.file,
-            action: record.action,
-            mimeType: record.mimeType,
-            date: serverTimestamp(),
-            // Don't save raw data/base64 to firestore since we have the URL instead!
-            data: null, 
-            downloadURL,
-            storagePath
-        };
-        
-        const docRef = await addDoc(historyRef, docData);
-        return docRef.id;
+    static normalizeDate(value) {
+        if (!value) return new Date().toISOString();
+        if (typeof value === 'string') return value;
+        if (value?.toDate && typeof value.toDate === 'function') return value.toDate().toISOString();
+        return new Date().toISOString();
     }
 
-    static async getRecords(email) {
-        if (!db) return [];
-        const historyRef = collection(db, "historyRecords");
-        const q = query(historyRef, where("email", "==", email));
-        const querySnapshot = await getDocs(q);
-        
-        const records = [];
-        querySnapshot.forEach((doc) => {
-            const data = doc.data();
-            records.push({
-                id: doc.id,
-                ...data,
-                // Convert timestamp fallback
-                date: data.date ? data.date.toDate().toISOString() : new Date().toISOString()
+    // Wait for Firebase Auth to finish hydrating before reading currentUser.
+    // auth.currentUser is null during the async initialization window on page
+    // load — reading it directly caused addRecord to silently fail every time.
+    static waitForAuth(timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            if (auth?.currentUser) return resolve(auth.currentUser);
+
+            const timer = setTimeout(() => {
+                unsubscribe();
+                reject(new Error("Auth timeout — please sign in again."));
+            }, timeoutMs);
+
+            const unsubscribe = auth.onAuthStateChanged((user) => {
+                clearTimeout(timer);
+                unsubscribe();
+                if (user) resolve(user);
+                else reject(new Error("You must be signed in to save history."));
             });
         });
-        
-        // Sorting strictly by date desc
-        return records.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+
+    static async addRecord(email, record) {
+        if (!db) throw new Error("Firebase DB not initialized.");
+
+        let currentUser;
+        try {
+            currentUser = await HistoryStore.waitForAuth();
+        } catch (authErr) {
+            console.warn("HistoryStore.addRecord: skipped (not authenticated):", authErr.message);
+            return null;
+        }
+
+        const normalizedEmail = (currentUser.email || email || '').trim().toLowerCase();
+
+        // Save metadata only — no file bytes in Firestore, no Storage upload
+        try {
+            const docData = {
+                userId: currentUser.uid,
+                email: currentUser.email || email,
+                emailLower: normalizedEmail,
+                file: record.file,
+                action: record.action,
+                mimeType: record.mimeType || 'application/octet-stream',
+                date: serverTimestamp(),
+                downloadURL: null,   // no Storage — file was already downloaded to device
+                storagePath: null
+            };
+
+            const docRef = await addDoc(collection(db, "historyRecords"), docData);
+            console.log("History record saved:", docRef.id);
+            return docRef.id;
+        } catch (err) {
+            console.error("HistoryStore: Firestore write failed:", err.message);
+            throw err;
+        }
+    }
+
+    static async getRecords() {
+        if (!db) return [];
+
+        let currentUser;
+        try {
+            currentUser = await HistoryStore.waitForAuth();
+        } catch {
+            return [];
+        }
+
+        try {
+            const q = query(
+                collection(db, "historyRecords"),
+                where("userId", "==", currentUser.uid)
+            );
+            const snapshot = await getDocs(q);
+            return snapshot.docs
+                .map(docSnap => {
+                    const data = docSnap.data();
+                    return { id: docSnap.id, ...data, date: HistoryStore.normalizeDate(data.date) };
+                })
+                .sort((a, b) => new Date(b.date) - new Date(a.date));
+        } catch (err) {
+            console.error("HistoryStore.getRecords failed:", err.message);
+            return [];
+        }
     }
 
     static async deleteRecord(id, storagePath = null) {
         if (!db) return;
-        
-        // Clean up from Firebase Storage bucket first
-        if (storagePath && storage) {
-            try {
-                const fileRef = ref(storage, storagePath);
-                await deleteObject(fileRef);
-            } catch (err) {
-                console.warn("Could not delete from cloud storage bucket:", err);
-            }
-        }
-        
-        // Delete the Firestore document
+        // storagePath is always null now but kept for API compatibility with HistoryPanel
         await deleteDoc(doc(db, "historyRecords", id));
+    }
+
+    static async deleteAllRecords() {
+        if (!db) return;
+
+        let currentUser;
+        try { currentUser = await HistoryStore.waitForAuth(); }
+        catch { return; }
+
+        const snapshot = await getDocs(
+            query(collection(db, "historyRecords"), where("userId", "==", currentUser.uid))
+        );
+        for (const docSnap of snapshot.docs) {
+            await deleteDoc(doc(db, "historyRecords", docSnap.id));
+        }
     }
 }

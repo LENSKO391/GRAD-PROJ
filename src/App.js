@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { HistoryStore, HistoryPanel } from './HistoryCrypto';
+import { HistoryStore } from './HistoryStore';
+import { HistoryPanel } from './HistoryPanel';
 import { TabBtn, ModeToggle, Notice, SubmitBtn } from './components/UIComponents';
-import { googleSignIn, registerWithEmail, loginWithEmail, resetPassword } from './FirebaseAuth';
+import { googleSignIn, registerWithEmail, loginWithEmail, resetPassword,auth } from './FirebaseAuth';
+import { onAuthStateChanged } from 'firebase/auth';
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
 const toB64 = (buf) => { const bytes = new Uint8Array(buf); let bin = ''; const C = 8192; for (let i = 0; i < bytes.length; i += C) bin += String.fromCharCode(...bytes.subarray(i, i + C)); return btoa(bin); };
@@ -37,9 +39,6 @@ class CryptoEngine {
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64(iv) }, key, fromB64(ciphertext)));
   }
 }
-
-// HistoryStore is imported from './HistoryCrypto.js'
-HistoryStore.init().catch(console.error);
 
 class AccountManager {
   static ACCOUNTS_KEY = 'encryptionSystemAccounts';
@@ -1375,8 +1374,41 @@ const EncryptionSystem = () => {
   const [showChangePwd, setShowChangePwd] = useState(false);
   const [historyUnlocked, setHistoryUnlocked] = useState(false);
 
-  useEffect(() => { const s = accountManager.getSession(); if (s) { setUser(s); setIsAuth(true); } }, []);
-
+useEffect(() => {
+  // onAuthStateChanged fires once immediately with the current auth state,
+  // then again whenever the user signs in or out. We wait for this before
+  // trusting anything in localStorage, so auth.currentUser is never null
+  // when Firestore queries run.
+  const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+    if (firebaseUser) {
+      // Firebase session is alive — safe to restore app-level session
+      const s = accountManager.getSession();
+      if (s) {
+        setUser(s);
+        setIsAuth(true);
+      } else {
+        // Firebase knows the user but we have no local session (e.g. after
+        // clearing localStorage manually). Build a minimal session from
+        // the Firebase user so history still works.
+        const fallback = {
+          email: firebaseUser.email,
+          name: firebaseUser.displayName || firebaseUser.email.split('@')[0],
+          historyPin: ''
+        };
+        accountManager.persistSession({ user: fallback });
+        setUser(fallback);
+        setIsAuth(true);
+      }
+    } else {
+      // Firebase says no active session — clear everything
+      accountManager.clearSession();
+      setUser(null);
+      setIsAuth(false);
+    }
+  });
+ 
+  return () => unsubscribe(); // clean up listener on unmount
+}, []);
   const handleLogin = (u) => { setUser(u); setIsAuth(true); setHistoryUnlocked(false); };
   const handleLogout = () => { accountManager.clearSession(); setUser(null); setIsAuth(false); setHistoryUnlocked(false); };
 
