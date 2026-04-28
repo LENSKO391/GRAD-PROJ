@@ -3,7 +3,7 @@ import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shie
 import * as XLSX from 'xlsx';
 import { HistoryStore, HistoryPanel } from './HistoryCrypto';
 import { TabBtn, ModeToggle, Notice, SubmitBtn } from './components/UIComponents';
-import { googleSignIn } from './FirebaseAuth';
+import { googleSignIn, registerWithEmail, loginWithEmail, resetPassword } from './FirebaseAuth';
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
 const toB64 = (buf) => { const bytes = new Uint8Array(buf); let bin = ''; const C = 8192; for (let i = 0; i < bytes.length; i += C) bin += String.fromCharCode(...bytes.subarray(i, i + C)); return btoa(bin); };
@@ -1123,24 +1123,47 @@ const AuthScreen = ({ onLogin }) => {
   const [authMode, setAuthMode] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '', historyPin: '' });
   const [showPwd, setShowPwd] = useState(false);
-  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
-    e.preventDefault(); setError('');
+  const handleSubmit = async (e) => {
+    e.preventDefault(); setError(''); setSuccess('');
+    setLoading(true);
     try {
       let user;
       if (authMode === 'login') {
-        user = accountManager.login({ email: form.email, password: form.password });
+        const firebaseUser = await loginWithEmail(form.email, form.password);
+        user = { email: firebaseUser.email, name: firebaseUser.displayName || firebaseUser.email.split('@')[0], historyPin: '' };
       } else {
-        accountManager.register({ name: form.name, email: form.email, password: form.password, historyPin: form.historyPin });
-        user = { email: form.email, name: form.name, historyPin: form.historyPin };
+        const firebaseUser = await registerWithEmail(form.name, form.email, form.password);
+        user = { email: firebaseUser.email, name: form.name, historyPin: form.historyPin };
       }
-      accountManager.persistSession({ user }); onLogin(user);
-    } catch (err) { setError(err.message); }
+      accountManager.persistSession({ user }); 
+      onLogin(user);
+    } catch (err) { 
+      setError(err.message); 
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError(''); setSuccess('');
+    if (!form.email) return setError('Please enter your email address first.');
+    setLoading(true);
+    try {
+      await resetPassword(form.email);
+      setSuccess('Password reset link sent to your email!');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleGoogleSignIn = async () => {
-    setError('');
+    setError(''); setSuccess('');
+    setLoading(true);
     try {
       const { user, accessToken } = await googleSignIn();
       const updatedUser = { ...user, googleAccessToken: accessToken };
@@ -1148,6 +1171,8 @@ const AuthScreen = ({ onLogin }) => {
       onLogin(updatedUser);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1183,6 +1208,7 @@ const AuthScreen = ({ onLogin }) => {
             ))}
           </div>
           {error && <Notice type="error">{error}</Notice>}
+          {success && <Notice type="success">{success}</Notice>}
           <form onSubmit={handleSubmit} className="space-y-4 mt-4">
             {authMode === 'signup' && field('name', 'Full Name', 'text', <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />, 'Enter your name', { required: true })}
             {field('email', 'Email', 'email', <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />, 'Enter email', { required: true })}
@@ -1197,6 +1223,13 @@ const AuthScreen = ({ onLogin }) => {
                   {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+              {authMode === 'login' && (
+                <div className="flex justify-end mt-1.5">
+                  <button type="button" onClick={handleForgotPassword} className="text-xs text-cyan-500 hover:text-cyan-400 font-semibold transition-colors">
+                    Forgot Password?
+                  </button>
+                </div>
+              )}
             </div>
             {authMode === 'signup' && (
               <div className="pt-2 border-t border-slate-800">
@@ -1214,9 +1247,9 @@ const AuthScreen = ({ onLogin }) => {
                 <p className="text-[10px] text-slate-500 mt-1.5 italic">Leave empty to access history directly without a PIN.</p>
               </div>
             )}
-            <button type="submit"
-              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white py-3 rounded-lg hover:from-cyan-500 hover:to-blue-500 font-semibold shadow-lg transition-all text-sm mt-2">
-              {authMode === 'login' ? 'Login' : 'Create Account'}
+            <button type="submit" disabled={loading}
+              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 text-white py-3 rounded-lg hover:from-cyan-500 hover:to-blue-500 font-semibold shadow-lg transition-all text-sm mt-2 disabled:opacity-50">
+              {loading ? 'Processing...' : (authMode === 'login' ? 'Login' : 'Create Account')}
             </button>
             <div className="relative flex items-center justify-center mt-6">
               <div className="border-t border-slate-700 w-full absolute"></div>

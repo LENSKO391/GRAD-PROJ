@@ -30,7 +30,7 @@ export const ModeToggle = ({ value, onChange }) => (
 );
 
 export const Notice = ({ type, children }) => (
-  <div className={`p-3 rounded-lg text-sm flex items-start gap-2 ${type === 'error' ? 'bg-red-950 border border-red-700 text-red-200' : 'bg-emerald-950 border border-emerald-700 text-emerald-200'
+  <div className={`p-3 rounded-lg text-sm flex items-start gap-2 ${type === 'error' ? 'bg-red-500/10 border border-red-500/50 text-red-400' : 'bg-emerald-500/10 border border-emerald-500/50 text-emerald-400'
     }`}>
     {type === 'success' && <CheckCircle size={16} className="mt-0.5 shrink-0" />}
     <span>{children}</span>

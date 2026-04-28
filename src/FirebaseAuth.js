@@ -1,5 +1,14 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, signInWithPopup, GoogleAuthProvider, signOut } from "firebase/auth";
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -20,10 +29,10 @@ export let auth;
 export let db;
 export let storage;
 
-console.log("Firebase Auth/DB initialized with placeholder config. Please update src/FirebaseAuth.js before deploying.");
+console.log("Firebase Auth/DB initialized. Please ensure Email/Password and Google providers are enabled in Firebase Console.");
 
 try {
-  if (firebaseConfig.apiKey !== "YOUR_API_KEY") {
+  if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY") {
     app = initializeApp(firebaseConfig);
     auth = getAuth(app);
     db = getFirestore(app);
@@ -32,6 +41,24 @@ try {
 } catch(e) {
   console.warn("Firebase not properly configured:", e.message);
 }
+
+export const registerWithEmail = async (name, email, password) => {
+  if (!auth) throw new Error("Firebase not initialized.");
+  const res = await createUserWithEmailAndPassword(auth, email, password);
+  await updateProfile(res.user, { displayName: name });
+  return res.user;
+};
+
+export const loginWithEmail = async (email, password) => {
+  if (!auth) throw new Error("Firebase not initialized.");
+  const res = await signInWithEmailAndPassword(auth, email, password);
+  return res.user;
+};
+
+export const resetPassword = async (email) => {
+  if (!auth) throw new Error("Firebase not initialized.");
+  await sendPasswordResetEmail(auth, email);
+};
 
 export const googleSignIn = async () => {
   if (!auth) throw new Error("Firebase config is missing in src/FirebaseAuth.js. Please update it with your actual keys from Firebase Console.");
