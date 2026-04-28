@@ -7,6 +7,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
+  fetchSignInMethodsForEmail,
   updateProfile
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
@@ -57,6 +58,11 @@ export const loginWithEmail = async (email, password) => {
 
 export const resetPassword = async (email) => {
   if (!auth) throw new Error("Firebase not initialized.");
+  // Check if the email is registered before sending a reset link
+  const methods = await fetchSignInMethodsForEmail(auth, email);
+  if (!methods || methods.length === 0) {
+    throw new Error("No account found with this email address. Please sign up first.");
+  }
   await sendPasswordResetEmail(auth, email);
 };
 
