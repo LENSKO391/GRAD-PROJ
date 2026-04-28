@@ -1123,6 +1123,7 @@ const AuthScreen = ({ onLogin }) => {
   const [authMode, setAuthMode] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '', historyPin: '' });
   const [showPwd, setShowPwd] = useState(false);
+  const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
 
