@@ -905,7 +905,7 @@ const TextFileCryptoPanel = ({ user }) => {
           <label className="block text-sm font-medium text-slate-300">Key Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
-            <Key size={12} /> Generate Key
+            <Key size={12} /> Generate Password
           </button>
         </div>
         <div className="relative">
@@ -982,7 +982,7 @@ const TextAreaCryptoPanel = ({ user }) => {
           <label className="block text-sm font-medium text-slate-300">Key Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
-            <Key size={12} /> Generate Key
+            <Key size={12} /> Generate Password
           </button>
         </div>
         <div className="relative">
@@ -1169,7 +1169,7 @@ if (dimension === '3d') {
           <label className="block text-sm font-medium text-slate-300">Key Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
-            <Key size={12} /> Generate Key
+            <Key size={12} /> Generate Password
           </button>
         </div>
         <div className="relative">
@@ -1333,7 +1333,7 @@ const DatasetCryptoPanel = ({ user }) => {
           <label className="block text-sm font-medium text-slate-300">Key Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
-            <Key size={12} /> Generate Key
+            <Key size={12} /> Generate Password
           </button>
         </div>
         <div className="relative">
