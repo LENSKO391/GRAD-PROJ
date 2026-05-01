@@ -443,6 +443,11 @@ static async encodeToDistorted3D(dataBytes, originalFile, password = null) {
   if (fileName.endsWith('.stl') || fileName.endsWith('.stlb')) {
     return FileProcessor.encodeToStlWithEmbeddedData(originalBytes, dataBytes, password);
   }
+
+  // For OBJ files, distort vertex coordinates using a password-derived keystream
+  if (fileName.endsWith('.obj') && password) {
+    return FileProcessor.encodeToDistortedObj(originalBytes, dataBytes, password);
+  }
   
   // For other 3D formats, still append (they're more forgiving)
   const magic = new TextEncoder().encode('CVLT');
@@ -455,6 +460,61 @@ static async encodeToDistorted3D(dataBytes, originalFile, password = null) {
   result.set(lenBuf, originalBytes.length + 4);
   result.set(dataBytes, originalBytes.length + 8);
   
+  return new Blob([result], { type: 'application/octet-stream' });
+}
+
+static async encodeToDistortedObj(originalBytes, dataBytes, password) {
+  // 1. Decode OBJ text and parse vertex lines
+  const text = new TextDecoder().decode(originalBytes);
+  const lines = text.split('\n');
+
+  // Count vertex lines to size the keystream
+  let vertexCount = 0;
+  for (const line of lines) {
+    if (line.startsWith('v ') || line.startsWith('v\t')) vertexCount++;
+  }
+
+  // 2. Derive keystream from password (3 floats per vertex × 4 bytes each)
+  const salt = new Uint8Array([0xAB, 0xCD, 0xEF, 0x01]);
+  const distortionKey = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
+  const keystreamLen = Math.max(65536, vertexCount * 12 + 16);
+  const zeroArray = new Uint8Array(keystreamLen);
+  const keystream = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: new Uint8Array(12) }, distortionKey, zeroArray
+  ));
+
+  // 3. Walk lines and distort vertex coordinates
+  let kpos = 0;
+  const distortedLines = lines.map(line => {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith('v ') && !trimmed.startsWith('v\t')) return line;
+    const parts = trimmed.split(/\s+/); // ['v', x, y, z, (optional w)]
+    if (parts.length < 4) return line;
+    const distorted = parts.map((p, i) => {
+      if (i === 0) return p; // keep 'v'
+      const orig = parseFloat(p);
+      if (isNaN(orig)) return p;
+      // noise in range [-0.4, +0.4] relative to original magnitude
+      const noise = (keystream[kpos++ % keystream.length] / 255) * 0.8 - 0.4;
+      const val = orig === 0 ? noise * 0.5 : orig + orig * noise;
+      return val.toFixed(6);
+    });
+    return distorted.join(' ');
+  });
+
+  // 4. Reassemble distorted OBJ and append CVLT payload
+  const distortedText = distortedLines.join('\n');
+  const distortedBytes = new TextEncoder().encode(distortedText);
+  const magic = new TextEncoder().encode('CVLT');
+  const lenBuf = new Uint8Array(4);
+  new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
+
+  const result = new Uint8Array(distortedBytes.length + 4 + 4 + dataBytes.length);
+  result.set(distortedBytes, 0);
+  result.set(magic, distortedBytes.length);
+  result.set(lenBuf, distortedBytes.length + 4);
+  result.set(dataBytes, distortedBytes.length + 8);
+
   return new Blob([result], { type: 'application/octet-stream' });
 }
 static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
