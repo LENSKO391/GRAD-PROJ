@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Layers } from 'lucide-react';
+import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Layers, Copy, Check } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { HistoryStore } from './HistoryStore';
 import { HistoryPanel } from './HistoryPanel';
@@ -7,6 +7,19 @@ import { TabBtn, ModeToggle, Notice, SubmitBtn } from './components/UIComponents
 import { googleSignIn, registerWithEmail, loginWithEmail, resetPassword,auth } from './FirebaseAuth';
 import { onAuthStateChanged } from 'firebase/auth';
 // ─── Utility helpers ──────────────────────────────────────────────────────────
+
+// ─── PRNG Key Generator ───────────────────────────────────────────────────────
+const PRNG_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+';
+const generateRandomKey = (length = 24) => {
+  const arr = new Uint8Array(length * 2);
+  crypto.getRandomValues(arr);
+  let key = '';
+  for (let i = 0; i < arr.length && key.length < length; i++) {
+    const idx = arr[i] % PRNG_CHARSET.length;
+    key += PRNG_CHARSET[idx];
+  }
+  return key;
+};
 
 const toB64 = (buf) => { const bytes = new Uint8Array(buf); let bin = ''; const C = 8192; for (let i = 0; i < bytes.length; i += C) bin += String.fromCharCode(...bytes.subarray(i, i + C)); return btoa(bin); };
 const fromB64 = (str) => { const c = str.replace(/[^A-Za-z0-9+/]/g, ''); return Uint8Array.from(atob(c + '='.repeat((4 - c.length % 4) % 4)), ch => ch.charCodeAt(0)); };
@@ -640,7 +653,9 @@ const TextFileCryptoPanel = ({ user }) => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const reset = () => { setError(''); setSuccess(''); };
+  const handleCopyKey = () => { if (!key) return; navigator.clipboard.writeText(key); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
   const handleFile = (e) => {
     const f = e.target.files?.[0] || null;
@@ -692,12 +707,21 @@ const TextFileCryptoPanel = ({ user }) => {
         {file && <p className="text-slate-500 text-xs mt-1.5">Selected: {file.name}</p>}
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
+            className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
+            <Key size={12} /> Generate Key
+          </button>
+        </div>
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key"
+            placeholder="Enter encryption key or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
+            {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+          </button>
           <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
             {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
@@ -716,6 +740,8 @@ const TextAreaCryptoPanel = ({ user }) => {
   const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const handleCopyKey = () => { if (!key) return; navigator.clipboard.writeText(key); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   const reset = () => { setError(''); setOutputText(''); };
 
   const handleSubmit = async (e) => {
@@ -758,12 +784,21 @@ const TextAreaCryptoPanel = ({ user }) => {
           rows={5} className="w-full bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-cyan-500 focus:outline-none resize-y font-mono" required />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
+            className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
+            <Key size={12} /> Generate Key
+          </button>
+        </div>
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key"
+            placeholder="Enter encryption key or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
+            {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+          </button>
           <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
             {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
@@ -798,7 +833,9 @@ const ImageCryptoPanel = ({ user }) => {
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [copied, setCopied] = useState(false);
   const reset = () => { setError(''); setSuccess(''); };
+  const handleCopyKey = () => { if (!key) return; navigator.clipboard.writeText(key); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
   const handleFile = (e) => {
     const f = e.target.files?.[0] || null;
@@ -944,12 +981,21 @@ if (dimension === '3d') {
         )}
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
+            className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
+            <Key size={12} /> Generate Key
+          </button>
+        </div>
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key"
+            placeholder="Enter encryption key or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
+            {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+          </button>
           <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
             {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
@@ -971,7 +1017,9 @@ const DatasetCryptoPanel = ({ user }) => {
   const [success, setSuccess] = useState('');
   const [processing, setProcessing] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [copied, setCopied] = useState(false);
   const reset = () => { setError(''); setSuccess(''); };
+  const handleCopyKey = () => { if (!key) return; navigator.clipboard.writeText(key); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
   const parsePreview = async (f) => {
     try {
@@ -1097,12 +1145,21 @@ const DatasetCryptoPanel = ({ user }) => {
         </div>
       )}
       <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Key Password</label>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
+            className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
+            <Key size={12} /> Generate Key
+          </button>
+        </div>
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key"
+            placeholder="Enter encryption key or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
+          <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
+            {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+          </button>
           <button type="button" onClick={() => setShowKey(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
             {showKey ? <EyeOff size={17} /> : <Eye size={17} />}
           </button>
