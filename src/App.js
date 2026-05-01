@@ -438,29 +438,163 @@ static async decodeFromDistortedPng(file, password) {
 static async encodeToDistorted3D(dataBytes, originalFile, password = null) {
   const originalBytes = new Uint8Array(await FileProcessor.readArrayBuffer(originalFile));
   const fileName = originalFile.name.toLowerCase();
-  
-  // For STL files, embed data inside the file structure
+
+  // STL → embed payload inside attribute bytes + distort vertices
   if (fileName.endsWith('.stl') || fileName.endsWith('.stlb')) {
     return FileProcessor.encodeToStlWithEmbeddedData(originalBytes, dataBytes, password);
   }
 
-  // For OBJ files, distort vertex coordinates using a password-derived keystream
+  // OBJ → distort vertex coordinate lines using password-derived keystream
   if (fileName.endsWith('.obj') && password) {
     return FileProcessor.encodeToDistortedObj(originalBytes, dataBytes, password);
   }
-  
-  // For other 3D formats, still append (they're more forgiving)
+
+  // GLB → XOR the binary BIN chunk (geometry + textures) with keystream
+  if (fileName.endsWith('.glb') && password) {
+    return FileProcessor.encodeToDistortedGlb(originalBytes, dataBytes, password);
+  }
+
+  // GLTF → scramble inline base64 buffer data URIs
+  if (fileName.endsWith('.gltf') && password) {
+    return FileProcessor.encodeToDistortedGltf(originalBytes, dataBytes, password);
+  }
+
+  // FBX / other → plain append (proprietary format, unsafe to mutate binary structure)
   const magic = new TextEncoder().encode('CVLT');
   const lenBuf = new Uint8Array(4);
   new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
-  
   const result = new Uint8Array(originalBytes.length + 4 + 4 + dataBytes.length);
   result.set(originalBytes, 0);
   result.set(magic, originalBytes.length);
   result.set(lenBuf, originalBytes.length + 4);
   result.set(dataBytes, originalBytes.length + 8);
-  
   return new Blob([result], { type: 'application/octet-stream' });
+}
+
+// ── GLB distortion ────────────────────────────────────────────────────────────
+// GLB = Binary glTF. Structure: 12-byte header, then chunks [length(4), type(4), data].
+// Chunk type 0x004E4942 = BIN\0 — holds all geometry/texture binary data.
+// XOR-ing this chunk completely scrambles the 3D content while keeping the file parseable
+// (viewers will see garbage geometry or crash to load, which is the intended effect).
+static async encodeToDistortedGlb(originalBytes, dataBytes, password) {
+  const view = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
+
+  // Validate GLB magic: 'glTF' = 0x46546C67
+  if (view.getUint32(0, true) !== 0x46546C67) {
+    throw new Error('Not a valid GLB file.');
+  }
+
+  const distorted = new Uint8Array(originalBytes.length);
+  distorted.set(originalBytes);
+
+  // Walk chunks to find BIN chunk
+  let off = 12;
+  let binDistorted = false;
+  while (off + 8 <= originalBytes.length) {
+    const chunkLength = view.getUint32(off, true);
+    const chunkType   = view.getUint32(off + 4, true);
+    if (chunkType === 0x004E4942) { // BIN\0
+      const salt = new Uint8Array([0x47, 0x4C, 0x42, 0x00]);
+      const key  = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
+      const keystreamLen = Math.max(65536, chunkLength + 16);
+      const keystream = new Uint8Array(await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: new Uint8Array(12) }, key, new Uint8Array(keystreamLen)
+      ));
+      const dataStart = off + 8;
+      for (let i = 0; i < chunkLength; i++) {
+        distorted[dataStart + i] ^= keystream[i % keystream.length];
+      }
+      binDistorted = true;
+      break;
+    }
+    off += 8 + chunkLength;
+  }
+
+  if (!binDistorted) {
+    // No BIN chunk found (geometry-less GLB) — XOR the JSON chunk as fallback
+    const jsonLength = view.getUint32(12, true);
+    const salt = new Uint8Array([0x47, 0x4C, 0x54, 0x46]);
+    const key  = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
+    const keystream = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(12) }, key, new Uint8Array(Math.max(65536, jsonLength + 16))
+    ));
+    for (let i = 0; i < jsonLength; i++) {
+      distorted[20 + i] ^= keystream[i % keystream.length]; // 12 header + 8 chunk-header
+    }
+  }
+
+  // Append CVLT payload
+  const cvlt = new TextEncoder().encode('CVLT');
+  const lenBuf = new Uint8Array(4);
+  new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
+  const result = new Uint8Array(distorted.length + 8 + dataBytes.length);
+  result.set(distorted, 0);
+  result.set(cvlt, distorted.length);
+  result.set(lenBuf, distorted.length + 4);
+  result.set(dataBytes, distorted.length + 8);
+  return new Blob([result], { type: 'model/gltf-binary' });
+}
+
+// ── GLTF distortion ───────────────────────────────────────────────────────────
+// GLTF is a JSON text file. Buffers can be inline (data:...;base64,<data>)
+// or external .bin references (which we can't reach). We scramble any inline
+// base64 buffer data so the geometry is unreadable. External-buffer GLTF files
+// fall through to plain CVLT append.
+static async encodeToDistortedGltf(originalBytes, dataBytes, password) {
+  let json;
+  try {
+    json = JSON.parse(new TextDecoder().decode(originalBytes));
+  } catch {
+    throw new Error('Not a valid GLTF file.');
+  }
+
+  let scrambledAny = false;
+  if (Array.isArray(json.buffers)) {
+    const salt = new Uint8Array([0x47, 0x54, 0x4C, 0x46]);
+    const key  = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
+
+    for (const buf of json.buffers) {
+      if (typeof buf.uri === 'string' && buf.uri.startsWith('data:')) {
+        // Extract base64 payload after the comma
+        const commaIdx = buf.uri.indexOf(',');
+        if (commaIdx === -1) continue;
+        const b64 = buf.uri.slice(commaIdx + 1);
+        const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+        // XOR with keystream
+        const keystream = new Uint8Array(await crypto.subtle.encrypt(
+          { name: 'AES-GCM', iv: new Uint8Array(12) }, key, new Uint8Array(Math.max(65536, raw.length + 16))
+        ));
+        const scrambled = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) scrambled[i] = raw[i] ^ keystream[i % keystream.length];
+
+        // Re-encode as base64 data URI (keep same mime prefix)
+        const prefix = buf.uri.slice(0, commaIdx + 1);
+        const scrambledB64 = btoa(String.fromCharCode(...scrambled));
+        buf.uri = prefix + scrambledB64;
+        scrambledAny = true;
+      }
+    }
+  }
+
+  const outText = JSON.stringify(json);
+  const outBytes = new TextEncoder().encode(outText);
+
+  if (!scrambledAny) {
+    // External buffers only — plain CVLT append, can't distort geometry
+    console.warn('GLTF has no inline buffers — falling back to plain payload append.');
+  }
+
+  // Append CVLT payload
+  const cvlt = new TextEncoder().encode('CVLT');
+  const lenBuf = new Uint8Array(4);
+  new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
+  const result = new Uint8Array(outBytes.length + 8 + dataBytes.length);
+  result.set(outBytes, 0);
+  result.set(cvlt, outBytes.length);
+  result.set(lenBuf, outBytes.length + 4);
+  result.set(dataBytes, outBytes.length + 8);
+  return new Blob([result], { type: 'model/gltf+json' });
 }
 
 static async encodeToDistortedObj(originalBytes, dataBytes, password) {
