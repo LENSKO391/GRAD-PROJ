@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Layers, Copy, Check } from 'lucide-react';
+import { Lock, User, Mail, Eye, EyeOff, LogOut, Key, FileText, Image, Type, Shield, Database, Clock, Box, Copy, Check } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { HistoryStore } from './HistoryStore';
 import { HistoryPanel } from './HistoryPanel';
@@ -1016,9 +1016,9 @@ const TextAreaCryptoPanel = ({ user }) => {
 };
 
 // FIX: `user` was missing from the destructured props — history records were silently dropped.
-const ImageCryptoPanel = ({ user }) => {
+const ImageCryptoPanel = ({ user, forcedDimension = null }) => {
   const [mode, setMode] = useState('encrypt');
-  const [dimension, setDimension] = useState('2d');
+  const dimension = forcedDimension || '2d';
   const [file, setFile] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [key, setKey] = useState('');
@@ -1142,16 +1142,6 @@ if (dimension === '3d') {
       {success && <Notice type="success">{success}</Notice>}
       <div className="flex flex-col gap-3">
         <ModeToggle value={mode} onChange={m => { setMode(m); setFile(null); setPreview(null); setKey(''); setShowKey(false); setFileInputKey(v => v + 1); reset(); }} />
-        {mode === 'encrypt' && (
-          <div className="flex gap-2 p-1 bg-slate-900/40 rounded-lg border border-slate-700/50">
-            {[{ id: '2d', label: '2D Image', icon: Layers }, { id: '3d', label: '3D Model', icon: Box }].map(d => (
-              <button key={d.id} type="button" onClick={() => { setDimension(d.id); setFile(null); setPreview(null); reset(); }}
-                className={`flex-1 flex items-center justify-center gap-2 py-1.5 rounded-md text-xs font-medium transition-all ${dimension === d.id ? 'bg-slate-700 text-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}>
-                <d.icon size={13} />{d.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -1604,19 +1594,21 @@ const HistoryLock = ({ user, onUnlock }) => {
 const TABS = [
   { id: 'file', label: 'Text Files', icon: FileText },
   { id: 'textarea', label: 'Plain Text', icon: Type },
-  { id: 'image', label: 'Images', icon: Image },
+  { id: 'image', label: '2D Images', icon: Image },
+  { id: 'model', label: '3D Models', icon: Box },
   { id: 'dataset', label: 'Datasets', icon: Database },
 ];
 
 const TAB_DESCRIPTIONS = {
   file: 'Encrypt or decrypt .txt files. Supports all characters including colons, semicolons, and special symbols.',
   textarea: 'Encrypt or decrypt any text directly in the browser. Copy the JSON output to decrypt later.',
-  image: 'Encrypt or decrypt image files (2D/3D)',
+  image: 'Encrypt or decrypt 2D image files (PNG, JPEG, GIF, WebP, BMP).',
+  model: 'Encrypt or decrypt 3D model files (.glb, .gltf, .obj, .stl, .fbx) with visual distortion.',
   dataset: 'Encrypt or decrypt dataset files (.csv, .xlsx). Preview your data before encrypting.',
   history: 'View a timeline of all your encryption and decryption activities.',
 };
 
-const TAB_TITLES = { file: 'Text File Encryption', textarea: 'Plain Text Encryption', image: 'Image Encryption', dataset: 'Dataset Encryption', history: 'Activity History' };
+const TAB_TITLES = { file: 'Text File Encryption', textarea: 'Plain Text Encryption', image: '2D Image Encryption', model: '3D Model Encryption', dataset: 'Dataset Encryption', history: 'Activity History' };
 
 const EncryptionSystem = () => {
   const [user, setUser] = useState(null);
@@ -1716,7 +1708,8 @@ useEffect(() => {
           </div>
           {activeTab === 'file' && <TextFileCryptoPanel user={user} />}
           {activeTab === 'textarea' && <TextAreaCryptoPanel user={user} />}
-          {activeTab === 'image' && <ImageCryptoPanel user={user} />}
+          {activeTab === 'image' && <ImageCryptoPanel user={user} forcedDimension="2d" />}
+          {activeTab === 'model' && <ImageCryptoPanel user={user} forcedDimension="3d" />}
           {activeTab === 'dataset' && <DatasetCryptoPanel user={user} />}
           {activeTab === 'history' && (
             user.historyPin && !historyUnlocked
