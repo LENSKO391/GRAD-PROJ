@@ -902,7 +902,7 @@ const TextFileCryptoPanel = ({ user }) => {
       </div>
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <label className="block text-sm font-medium text-slate-300">Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
             <Key size={12} /> Generate Password
@@ -911,7 +911,7 @@ const TextFileCryptoPanel = ({ user }) => {
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key or generate one"
+            placeholder="Enter password or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
           <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
             {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
@@ -979,7 +979,7 @@ const TextAreaCryptoPanel = ({ user }) => {
       </div>
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <label className="block text-sm font-medium text-slate-300">Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
             <Key size={12} /> Generate Password
@@ -988,7 +988,7 @@ const TextAreaCryptoPanel = ({ user }) => {
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key or generate one"
+            placeholder="Enter password or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
           <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
             {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
@@ -1166,7 +1166,7 @@ if (dimension === '3d') {
       </div>
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <label className="block text-sm font-medium text-slate-300">Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
             <Key size={12} /> Generate Password
@@ -1175,7 +1175,7 @@ if (dimension === '3d') {
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key or generate one"
+            placeholder="Enter password or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
           <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
             {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
@@ -1330,7 +1330,7 @@ const DatasetCryptoPanel = ({ user }) => {
       )}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label className="block text-sm font-medium text-slate-300">Key Password</label>
+          <label className="block text-sm font-medium text-slate-300">Password</label>
           <button type="button" onClick={() => { setKey(generateRandomKey()); setShowKey(false); }}
             className="flex items-center gap-1.5 text-xs font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-all">
             <Key size={12} /> Generate Password
@@ -1339,7 +1339,7 @@ const DatasetCryptoPanel = ({ user }) => {
         <div className="relative">
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={17} />
           <input type={showKey ? 'text' : 'password'} value={key} onChange={e => setKey(e.target.value)}
-            placeholder="Enter encryption key or generate one"
+            placeholder="Enter password or generate one"
             className="w-full pl-10 pr-10 py-3 bg-slate-900 border border-slate-600/80 text-slate-200 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:outline-none text-sm" />
           <button type="button" onClick={handleCopyKey} title="Copy key" className="absolute right-9 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 transition-colors">
             {copied ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
