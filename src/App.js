@@ -172,9 +172,17 @@ class FileProcessor {
     });
   }
 static async distortSTL(bytes, password) {
+  if (bytes.length < 84) throw new Error('STL file is too small or corrupt.');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const triCount = view.getUint32(80, true);
   const expectedSize = 84 + triCount * 50;
+  if (triCount === 0) throw new Error('STL file contains no triangles.');
+  if (expectedSize > bytes.length) {
+    const sample = new TextDecoder().decode(bytes.slice(0, 256));
+    if (sample.toLowerCase().includes('solid') && sample.includes('facet'))
+      throw new Error('ASCII STL format detected. Please re-export as Binary STL.');
+    throw new Error(`STL file appears truncated (needs ${expectedSize} bytes, got ${bytes.length}).`);
+  }
   
   // Copy the entire file
   const distorted = new Uint8Array(expectedSize);
@@ -652,8 +660,37 @@ static async encodeToDistortedObj(originalBytes, dataBytes, password) {
   return new Blob([result], { type: 'application/octet-stream' });
 }
 static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
+  // ── Validate binary STL before any DataView access ──────────────────────
+  // Do NOT use header text ("solid") to detect ASCII — many binary exporters
+  // (Blender, Fusion 360, etc.) also write "solid <name>" in their 80-byte header.
+  // The reliable check is whether file size matches the binary formula: 84 + triCount*50.
+  if (originalBytes.length < 84) {
+    throw new Error('STL file is too small or corrupt (must be at least 84 bytes).');
+  }
+  const _valView = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
+  const _triCount = _valView.getUint32(80, true);
+  const _expected = 84 + _triCount * 50;
+  if (_triCount === 0) {
+    throw new Error('STL file contains no triangles.');
+  }
+  if (_expected > originalBytes.length) {
+    // Check if it looks like ASCII STL (contains "solid" + "facet" keywords)
+    const sample = new TextDecoder().decode(originalBytes.slice(0, 256));
+    if (sample.toLowerCase().includes('solid') && sample.includes('facet')) {
+      throw new Error(
+        'ASCII STL format detected. Please re-export your model as Binary STL ' +
+        '(in Blender: uncheck "ASCII" on export; in Fusion 360: select "Binary" format).'
+      );
+    }
+    throw new Error(
+      `STL file appears truncated or corrupt — triangle count says ${_triCount} triangles ` +
+      `(needs ${_expected} bytes) but file is only ${originalBytes.length} bytes.`
+    );
+  }
+  // ── End validation ───────────────────────────────────────────────────────
+
   const view = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
-  const originalTriCount = view.getUint32(80, true);
+  const originalTriCount = _triCount; // reuse already-read value
   
   // Check if we have enough space in attribute bytes (2 bytes per triangle)
   const maxPayloadBytes = originalTriCount * 2;

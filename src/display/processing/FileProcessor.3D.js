@@ -36,15 +36,58 @@ import CryptoEngine from '../core/CryptoEngine';
  * @param {string} password     - كلمة السر للاشتقاق
  * @returns {Promise<Uint8Array>} STL مشوّه
  */
+/**
+ * Validates that an STL file is binary (not ASCII) and structurally sound.
+ * Throws a descriptive error if the file is ASCII, too small, or has a
+ * triangle count that doesn't match the actual file size.
+ */
+const validateBinarySTL = (bytes) => {
+  // Must have at least 84 bytes for the header + triangle count field
+  if (bytes.length < 84) {
+    throw new Error('STL file is too small or corrupt (must be at least 84 bytes).');
+  }
+
+  const view     = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const triCount = view.getUint32(80, true);
+  const expected = 84 + triCount * 50;
+
+  // If the size formula doesn't match, this is likely an ASCII STL or a corrupt file.
+  // NOTE: Do NOT use header text ("solid") to detect ASCII — many binary exporters
+  // (Blender, Fusion 360, etc.) also write "solid <name>" in their 80-byte header.
+  if (expected !== bytes.length) {
+    // Check if it looks like a text file (ASCII STL)
+    const sample = new TextDecoder().decode(bytes.slice(0, 256));
+    if (sample.toLowerCase().includes('solid') && sample.includes('facet')) {
+      throw new Error(
+        'ASCII STL format detected. Please re-export your model as Binary STL (available in Blender, Fusion 360, MeshLab, etc.).'
+      );
+    }
+    // Some binary files have extra trailing bytes — allow up to 84 extra
+    if (expected > bytes.length) {
+      throw new Error(
+        `STL file appears truncated or corrupt. Triangle count field says ${triCount} triangles ` +
+        `(needs ${expected} bytes) but file is only ${bytes.length} bytes.`
+      );
+    }
+    // expected < bytes.length means there are trailing bytes — that's fine, proceed
+  }
+
+  if (triCount === 0) {
+    throw new Error('STL file contains no triangles.');
+  }
+
+  return triCount;
+};
+
 const distortSTL = async (bytes, password) => {
+  const triCount  = validateBinarySTL(bytes); // validates bounds before any DataView access
   const view      = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const triCount  = view.getUint32(80, true); // عدد المثلثات (little-endian)
   const distorted = new Uint8Array(bytes.subarray(0, 84 + triCount * 50));
 
   // اشتقاق keystream من الـ password
   const salt        = new Uint8Array([0x12, 0x34, 0x56, 0x78]);
   const key         = await CryptoEngine.deriveKey({ password, salt, iterations: 1000 });
-  const keystreamLen = Math.max(65536, triCount * 36); // 9 floats × 4 bytes لكل مثلث
+  const keystreamLen = Math.max(65536, triCount * 36 + 1); // +1 guards against triCount=0
   const keystream   = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, key, new Uint8Array(keystreamLen))
   );
@@ -88,8 +131,8 @@ const distortSTL = async (bytes, password) => {
  *   → fallback: يُلحق CVLT payload في نهاية الملف
  */
 const encodeToStlWithEmbeddedData = async (originalBytes, dataBytes, password) => {
+  const originalTriCount = validateBinarySTL(originalBytes); // safe bounds check first
   const view             = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
-  const originalTriCount = view.getUint32(80, true);
   const maxPayloadBytes  = originalTriCount * 2; // 2 bytes attribute لكل مثلث
 
   if (dataBytes.length + 8 <= maxPayloadBytes) {
