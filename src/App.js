@@ -659,46 +659,104 @@ static async encodeToDistortedObj(originalBytes, dataBytes, password) {
 
   return new Blob([result], { type: 'application/octet-stream' });
 }
-static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
-  // ── Validate binary STL before any DataView access ──────────────────────
-  // Do NOT use header text ("solid") to detect ASCII — many binary exporters
-  // (Blender, Fusion 360, etc.) also write "solid <name>" in their 80-byte header.
-  // The reliable check is whether file size matches the binary formula: 84 + triCount*50.
-  if (originalBytes.length < 84) {
-    throw new Error('STL file is too small or corrupt (must be at least 84 bytes).');
-  }
-  const _valView = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
-  const _triCount = _valView.getUint32(80, true);
-  const _expected = 84 + _triCount * 50;
-  if (_triCount === 0) {
-    throw new Error('STL file contains no triangles.');
-  }
-  if (_expected > originalBytes.length) {
-    // Check if it looks like ASCII STL (contains "solid" + "facet" keywords)
-    const sample = new TextDecoder().decode(originalBytes.slice(0, 256));
-    if (sample.toLowerCase().includes('solid') && sample.includes('facet')) {
-      throw new Error(
-        'ASCII STL format detected. Please re-export your model as Binary STL ' +
-        '(in Blender: uncheck "ASCII" on export; in Fusion 360: select "Binary" format).'
-      );
-    }
-    throw new Error(
-      `STL file appears truncated or corrupt — triangle count says ${_triCount} triangles ` +
-      `(needs ${_expected} bytes) but file is only ${originalBytes.length} bytes.`
-    );
-  }
-  // ── End validation ───────────────────────────────────────────────────────
+static _asciiStlToBinary(bytes) {
+  // Parses ASCII STL text and builds an equivalent binary STL in memory.
+  const text = new TextDecoder().decode(bytes);
+  const triangles = [];
 
-  const view = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
-  const originalTriCount = _triCount; // reuse already-read value
+  // Match every "facet normal ... vertex ... vertex ... vertex ... endfacet" block
+  const facetRe = /facet\s+normal\s+([\S]+)\s+([\S]+)\s+([\S]+)\s+outer\s+loop\s+vertex\s+([\S]+)\s+([\S]+)\s+([\S]+)\s+vertex\s+([\S]+)\s+([\S]+)\s+([\S]+)\s+vertex\s+([\S]+)\s+([\S]+)\s+([\S]+)\s+endloop\s+endfacet/gi;
+  let m;
+  while ((m = facetRe.exec(text)) !== null) {
+    triangles.push([
+      parseFloat(m[1]),  parseFloat(m[2]),  parseFloat(m[3]),  // normal
+      parseFloat(m[4]),  parseFloat(m[5]),  parseFloat(m[6]),  // v1
+      parseFloat(m[7]),  parseFloat(m[8]),  parseFloat(m[9]),  // v2
+      parseFloat(m[10]), parseFloat(m[11]), parseFloat(m[12]), // v3
+    ]);
+  }
+
+  if (triangles.length === 0)
+    throw new Error('Could not parse any triangles from the ASCII STL file. The file may be corrupt.');
+
+  // Binary STL: 80-byte header + 4-byte count + triCount × 50 bytes
+  const bin = new Uint8Array(84 + triangles.length * 50);
+  const dv  = new DataView(bin.buffer);
+
+  // Write header (80 bytes) — encode "Binary STL converted from ASCII" as marker
+  const hdr = new TextEncoder().encode('Binary STL (auto-converted)');
+  bin.set(hdr, 0);
+
+  // Write triangle count
+  dv.setUint32(80, triangles.length, true);
+
+  // Write each triangle
+  for (let t = 0; t < triangles.length; t++) {
+    const base = 84 + t * 50;
+    const f = triangles[t];
+    // Normal (3 floats)
+    dv.setFloat32(base,      f[0],  true);
+    dv.setFloat32(base +  4, f[1],  true);
+    dv.setFloat32(base +  8, f[2],  true);
+    // Vertex 1
+    dv.setFloat32(base + 12, f[3],  true);
+    dv.setFloat32(base + 16, f[4],  true);
+    dv.setFloat32(base + 20, f[5],  true);
+    // Vertex 2
+    dv.setFloat32(base + 24, f[6],  true);
+    dv.setFloat32(base + 28, f[7],  true);
+    dv.setFloat32(base + 32, f[8],  true);
+    // Vertex 3
+    dv.setFloat32(base + 36, f[9],  true);
+    dv.setFloat32(base + 40, f[10], true);
+    dv.setFloat32(base + 44, f[11], true);
+    // Attribute byte count (2 bytes, set to 0)
+    dv.setUint16(base + 48, 0, true);
+  }
+  return bin;
+}
+
+static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
+  // ── Normalise: auto-convert ASCII STL → Binary STL ───────────────────────
+  // Detect ASCII STL by checking if file size matches binary formula 84 + N*50.
+  // Never rely on the 80-byte header text — binary exporters (Blender, Fusion 360)
+  // commonly write "solid <name>" there too.
+  let workingBytes = originalBytes;
+
+  if (originalBytes.length >= 84) {
+    const _dv  = new DataView(originalBytes.buffer, originalBytes.byteOffset, originalBytes.byteLength);
+    const _n   = _dv.getUint32(80, true);
+    const _exp = 84 + _n * 50;
+    if (_n === 0 || _exp > originalBytes.length) {
+      // Doesn't fit binary formula → try parsing as ASCII
+      const sample = new TextDecoder().decode(originalBytes.slice(0, 256));
+      if (sample.toLowerCase().includes('solid') || sample.includes('facet')) {
+        workingBytes = FileProcessor._asciiStlToBinary(originalBytes);
+      } else {
+        throw new Error(`STL file appears truncated or corrupt (expected ${_exp} bytes, got ${originalBytes.length}).`);
+      }
+    }
+  } else {
+    // File too small for binary — try ASCII parse
+    const sample = new TextDecoder().decode(originalBytes.slice(0, Math.min(256, originalBytes.length)));
+    if (sample.toLowerCase().includes('solid') || sample.includes('facet')) {
+      workingBytes = FileProcessor._asciiStlToBinary(originalBytes);
+    } else {
+      throw new Error('STL file is too small or corrupt (must be at least 84 bytes for binary STL).');
+    }
+  }
+  // ── End normalisation — workingBytes is now guaranteed binary STL ─────────
+
+  const view = new DataView(workingBytes.buffer, workingBytes.byteOffset, workingBytes.byteLength);
+  const originalTriCount = new DataView(workingBytes.buffer, workingBytes.byteOffset, workingBytes.byteLength).getUint32(80, true);
   
   // Check if we have enough space in attribute bytes (2 bytes per triangle)
   const maxPayloadBytes = originalTriCount * 2;
   
   if (dataBytes.length + 8 <= maxPayloadBytes) {
     // Small payload: store entirely in attribute bytes
-    const distorted = new Uint8Array(originalBytes.length);
-    distorted.set(originalBytes);
+    const distorted = new Uint8Array(workingBytes.length);
+    distorted.set(workingBytes);
     
     // Write magic 'CV' (2 bytes) at start of attribute bytes of first triangle
     // Write length, then data
@@ -763,11 +821,11 @@ static async encodeToStlWithEmbeddedData(originalBytes, dataBytes, password) {
     const lenBuf = new Uint8Array(4);
     new DataView(lenBuf.buffer).setUint32(0, dataBytes.length, true);
     
-    const result = new Uint8Array(originalBytes.length + 4 + 4 + dataBytes.length);
-    result.set(originalBytes, 0);
-    result.set(magic, originalBytes.length);
-    result.set(lenBuf, originalBytes.length + 4);
-    result.set(dataBytes, originalBytes.length + 8);
+    const result = new Uint8Array(workingBytes.length + 4 + 4 + dataBytes.length);
+    result.set(workingBytes, 0);
+    result.set(magic, workingBytes.length);
+    result.set(lenBuf, workingBytes.length + 4);
+    result.set(dataBytes, workingBytes.length + 8);
     
     return new Blob([result], { type: 'application/octet-stream' });
   }
